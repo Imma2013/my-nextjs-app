@@ -127,9 +127,9 @@ export default function Home() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to parse file');
 
-      // Send the parsed text as a message
+      // Gemini reads the attachment and returns resume-ready text for the chat.
       const resumeText = data.text;
-      const msg = `[Attached: ${file.name}] Here's my resume:\n\n${resumeText.substring(0, 2000)}${resumeText.length > 2000 ? '...' : ''}`;
+      const msg = `[Attached: ${file.name}] Gemini extracted my resume from this ${file.name.toLowerCase().endsWith('.pdf') ? 'PDF' : 'DOCX'} file:\n\n${resumeText.substring(0, 4000)}${resumeText.length > 4000 ? '...' : ''}`;
       setInput(msg);
 
     } catch (err: unknown) {
