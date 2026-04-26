@@ -2,7 +2,8 @@
 import { useState, useRef, useEffect } from 'react';
 
 type Message = { role: 'user' | 'assistant'; content: string; created_at?: string };
-type ChatSession = { id: string; user_id: string; title: string; created_at: string; updated_at: string };
+type ResumeContext = { id: string; title: string; file_name?: string; summary?: string; candidate_name?: string; headline?: string };
+type ChatSession = { id: string; user_id: string; title: string; resume_id?: string | null; resumes?: ResumeContext | null; created_at: string; updated_at: string };
 type OptimizeResult = {
   score: number;
   strengths: string[];
@@ -29,6 +30,7 @@ export default function Home() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [activeResume, setActiveResume] = useState<ResumeContext | null>(null);
   const [userId, setUserId] = useState('');
   const [loadingSessions, setLoadingSessions] = useState(false);
   const [input, setInput] = useState('');
@@ -85,6 +87,7 @@ export default function Home() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to load chat');
       setActiveSessionId(sessionId);
+      setActiveResume(data.session?.resumes ?? null);
       setMessages(data.messages ?? []);
       setView('chat');
     } catch (e: unknown) {
@@ -96,6 +99,7 @@ export default function Home() {
 
   function startNewChat() {
     setActiveSessionId(null);
+    setActiveResume(null);
     setMessages([]);
     setInput('');
     setView('chat');
@@ -123,12 +127,13 @@ export default function Home() {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: newMessages, userId, sessionId: activeSessionId }),
+        body: JSON.stringify({ messages: newMessages, userId, sessionId: activeSessionId, resumeId: activeResume?.id }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Error');
       setMessages([...newMessages, { role: 'assistant', content: data.reply }]);
       if (data.sessionId) setActiveSessionId(data.sessionId);
+      if (data.resume) setActiveResume(data.resume);
       await loadSessions();
     } catch (e: unknown) {
       setMessages([...newMessages, { role: 'assistant', content: '❌ ' + (e instanceof Error ? e.message : 'Something went wrong') }]);
@@ -177,8 +182,10 @@ export default function Home() {
     try {
       const formData = new FormData();
       formData.append('file', file);
+      formData.append('userId', userId);
+      if (activeSessionId) formData.append('sessionId', activeSessionId);
 
-      const res = await fetch('/api/parse-resume', {
+      const res = await fetch('/api/resumes', {
         method: 'POST',
         body: formData,
       });
@@ -186,10 +193,15 @@ export default function Home() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to parse file');
 
-      // Gemini reads the attachment and returns resume-ready text for the chat.
-      const resumeText = data.text;
-      const msg = `[Attached: ${file.name}] Gemini extracted my resume from this ${file.name.toLowerCase().endsWith('.pdf') ? 'PDF' : 'DOCX'} file:\n\n${resumeText.substring(0, 4000)}${resumeText.length > 4000 ? '...' : ''}`;
-      setInput(msg);
+      setActiveResume(data.resume);
+      if (data.sessionId) setActiveSessionId(data.sessionId);
+      await loadSessions();
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        content: `✅ ${data.message}
+
+I can now use this resume as context. Tell me the job/company you want to target, or ask for a quick resume analysis.`
+      }]);
 
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : 'Failed to parse file';
@@ -300,11 +312,25 @@ export default function Home() {
               )}
             </div>
 
+
+                {activeResume && (
+                  <div className="max-w-3xl mx-auto mb-3 rounded-2xl border border-blue-400/20 bg-blue-500/8 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-xs uppercase tracking-wide text-blue-200/70 mb-1">Resume context attached</div>
+                        <div className="font-semibold text-white/90">{activeResume.candidate_name || activeResume.title || 'Uploaded Resume'}</div>
+                        <div className="text-sm text-white/55 mt-1">{activeResume.summary || activeResume.file_name || 'Gemini parsed this resume and saved it for this chat.'}</div>
+                      </div>
+                      <div className="text-blue-300 text-xl">✓</div>
+                    </div>
+                  </div>
+                )}
+
             {/* Input bar */}
             <div className="px-4 pb-6 flex-shrink-0">
               <div className="max-w-3xl mx-auto">
                 {uploadingFile && (
-                  <div className="mb-2 text-xs text-white/40 text-center">Parsing resume file...</div>
+                  <div className="mb-2 text-xs text-white/40 text-center">Parsing and saving resume context with Gemini...</div>
                 )}
                 <div className="bg-white/5 border border-white/10 rounded-2xl p-3 flex flex-col gap-2">
                   <textarea rows={2}
