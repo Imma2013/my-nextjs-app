@@ -94,7 +94,7 @@ export default function Home() {
     setMessages(next);
     setBusy(true);
     try {
-      if (activeResume && /\b(edit|change|update|replace|rename|set|make)\b/i.test(msg) && /job title|title|role|position/i.test(msg)) {
+      if (activeResume && /\b(edit|change|update|replace|rename|set|make|rewrite|add|remove|delete)\b/i.test(msg)) {
         const value = /just\s+title/i.test(msg) ? 'Title' : undefined;
         const editRes = await fetch('/api/resume-edit', {
           method: 'POST',
