@@ -1,12 +1,33 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-function headers(key: string) {
+const BUCKET = 'resume-files';
+
+function restHeaders(key: string, contentType = 'application/json') {
   return {
-    'Content-Type': 'application/json',
+    'Content-Type': contentType,
     apikey: key,
     Authorization: `Bearer ${key}`,
     Prefer: 'return=representation',
   };
+}
+
+function getExt(file: File) {
+  const name = file.name.toLowerCase();
+  if (name.endsWith('.pdf')) return 'pdf';
+  if (name.endsWith('.docx')) return 'docx';
+  return 'bin';
+}
+
+async function createSignedUrl(baseUrl: string, key: string, path: string) {
+  const res = await fetch(`${baseUrl}/storage/v1/object/sign/${BUCKET}/${path}`, {
+    method: 'POST',
+    headers: restHeaders(key),
+    body: JSON.stringify({ expiresIn: 60 * 60 }),
+  });
+  if (!res.ok) return '';
+  const data = await res.json();
+  const signedURL = data.signedURL || data.signedUrl || '';
+  return signedURL ? `${baseUrl}/storage/v1${signedURL}` : '';
 }
 
 export async function POST(req: NextRequest) {
@@ -33,14 +54,32 @@ export async function POST(req: NextRequest) {
     const candidateName = parsedData.candidateName || parsed.candidateName || '';
     const title = candidateName ? `${candidateName}'s Resume` : file.name.replace(/\.(pdf|docx)$/i, '') || 'Uploaded Resume';
     const rawText = parsedData.text || parsed.resumeText || '';
+    const mimeType = file.type || (file.name.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    const storagePath = `${userId}/${crypto.randomUUID()}.${getExt(file)}`;
+
+    const uploadRes = await fetch(`${supabaseUrl}/storage/v1/object/${BUCKET}/${storagePath}`, {
+      method: 'POST',
+      headers: {
+        apikey: serviceKey,
+        Authorization: `Bearer ${serviceKey}`,
+        'Content-Type': mimeType,
+        'x-upsert': 'true',
+      },
+      body: Buffer.from(await file.arrayBuffer()),
+    });
+    if (!uploadRes.ok) throw new Error(await uploadRes.text());
+
+    const previewUrl = mimeType === 'application/pdf' ? await createSignedUrl(supabaseUrl, serviceKey, storagePath) : '';
 
     const resumeRes = await fetch(`${supabaseUrl}/rest/v1/resumes`, {
       method: 'POST',
-      headers: headers(serviceKey),
+      headers: restHeaders(serviceKey),
       body: JSON.stringify({
         user_id: userId,
         title,
         file_name: file.name,
+        storage_path: storagePath,
+        mime_type: mimeType,
         content: rawText,
         raw_text: rawText,
         parsed_json: parsed,
@@ -52,12 +91,13 @@ export async function POST(req: NextRequest) {
     if (!resumeRes.ok) throw new Error(await resumeRes.text());
     const resume = (await resumeRes.json())?.[0];
     if (!resume?.id) throw new Error('Failed to save resume');
+    resume.preview_url = previewUrl;
 
     let session = null;
     if (sessionId) {
       const updateRes = await fetch(`${supabaseUrl}/rest/v1/chat_sessions?id=eq.${encodeURIComponent(sessionId)}&user_id=eq.${encodeURIComponent(userId)}`, {
         method: 'PATCH',
-        headers: headers(serviceKey),
+        headers: restHeaders(serviceKey),
         body: JSON.stringify({ resume_id: resume.id }),
       });
       if (updateRes.ok) session = (await updateRes.json())?.[0] ?? null;
@@ -65,7 +105,7 @@ export async function POST(req: NextRequest) {
     if (!session) {
       const sessionRes = await fetch(`${supabaseUrl}/rest/v1/chat_sessions`, {
         method: 'POST',
-        headers: headers(serviceKey),
+        headers: restHeaders(serviceKey),
         body: JSON.stringify({ user_id: userId, title, resume_id: resume.id }),
       });
       if (!sessionRes.ok) throw new Error(await sessionRes.text());
