@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
+const GEMINI_MODEL = 'gemini-3-flash-preview';
+type EditOp = { operation?: 'replace' | 'add' | 'remove'; path: string; value?: unknown };
+
 function client() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -8,23 +11,160 @@ function client() {
   return createClient(url, key);
 }
 
+function copy(value: unknown) {
+  return JSON.parse(JSON.stringify(value ?? {}));
+}
+
+function getSection(parsed: any, name: string) {
+  parsed.sections = parsed.sections || {};
+  if (Array.isArray(parsed.sections[name])) return parsed.sections[name];
+  if (Array.isArray(parsed[name])) {
+    parsed.sections[name] = parsed[name];
+    return parsed.sections[name];
+  }
+  parsed.sections[name] = [];
+  return parsed.sections[name];
+}
+
+function ensureFirstExperience(parsed: any) {
+  const exp = getSection(parsed, 'experience');
+  if (!exp.length) exp.push({ role: 'Job Title', company: 'Company Name', bullets: [] });
+  return exp[0];
+}
+
+function valueFromMessage(message: string, fallback = 'Title') {
+  const quoted = message.match(/["“”']([^"“”']+)["“”']/)?.[1];
+  if (quoted) return quoted.trim();
+  if (/just\s+title/i.test(message)) return 'Title';
+  const after = message.match(/(?:say|to|as|be|with)\s+(.+)$/i)?.[1]?.trim();
+  if (after && after.length < 160) return after.replace(/[.?!]$/, '').trim();
+  return fallback;
+}
+
+function deterministicOps(message: string): EditOp[] {
+  const lower = message.toLowerCase();
+  const value = valueFromMessage(message);
+  if (/job title|\btitle\b|\brole\b|position/.test(lower)) return [{ operation: 'replace', path: 'experience.0.role', value }];
+  if (/company|employer/.test(lower)) return [{ operation: 'replace', path: 'experience.0.company', value }];
+  if (/location|city/.test(lower)) return [{ operation: 'replace', path: 'experience.0.location', value }];
+  if (/date|month|year|present/.test(lower)) return [{ operation: 'replace', path: 'experience.0.dates', value }];
+  if (/skill/.test(lower)) return [{ operation: 'add', path: 'skills', value }];
+  if (/bullet|responsibilit|achievement/.test(lower)) return [{ operation: 'replace', path: 'experience.0.bullets.0', value }];
+  return [];
+}
+
+function applyOp(parsedInput: any, op: EditOp) {
+  const parsed = copy(parsedInput);
+  const parts = String(op.path || '').replace(/^parsed_json\./, '').split('.').filter(Boolean);
+  if (!parts.length) return parsed;
+  const sections = new Set(['experience', 'education', 'skills', 'projects', 'awards', 'certifications']);
+  let target: any = parsed;
+  let start = 0;
+  if (sections.has(parts[0])) {
+    target = getSection(parsed, parts[0]);
+    start = 1;
+  } else if (parts[0] === 'sections' && sections.has(parts[1])) {
+    target = getSection(parsed, parts[1]);
+    start = 2;
+  }
+
+  if (op.operation === 'add' && sections.has(parts[0]) && parts.length === 1) {
+    target.push(op.value);
+    return parsed;
+  }
+
+  for (let i = start; i < parts.length - 1; i++) {
+    const key = parts[i];
+    const nextKey = parts[i + 1];
+    const idx = Number(key);
+    if (Array.isArray(target) && Number.isInteger(idx) && String(idx) === key) {
+      while (target.length <= idx) target.push({});
+      target = target[idx];
+    } else {
+      if (target[key] == null) target[key] = /^\d+$/.test(nextKey) ? [] : {};
+      target = target[key];
+    }
+  }
+
+  const last = parts[parts.length - 1];
+  const lastIndex = Number(last);
+  if (op.operation === 'remove') {
+    if (Array.isArray(target) && Number.isInteger(lastIndex) && String(lastIndex) === last) target.splice(lastIndex, 1);
+    else delete target[last];
+  } else if (op.operation === 'add' && Array.isArray(target[last])) {
+    target[last].push(op.value);
+  } else if (Array.isArray(target) && Number.isInteger(lastIndex) && String(lastIndex) === last) {
+    target[lastIndex] = op.value;
+  } else {
+    target[last] = op.value;
+  }
+
+  const exp = parsed.sections?.experience;
+  if (Array.isArray(exp)) exp.forEach((item: any) => { if (item.role && !item.title) item.title = item.role; if (item.title && !item.role) item.role = item.title; });
+  return parsed;
+}
+
+async function geminiOps(message: string, parsed: any): Promise<{ operations: EditOp[]; reply?: string }> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return { operations: [] };
+  const prompt = `Convert this resume edit request into JSON operations only. Paths must use experience.0.role, experience.0.company, experience.0.location, experience.0.dates, experience.0.bullets.0, skills, education.0.degree. Return JSON with operations and reply. Current resume JSON: ${JSON.stringify(parsed).slice(0, 9000)} Request: ${message}`;
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      generationConfig: {
+        responseMimeType: 'application/json',
+        responseJsonSchema: {
+          type: 'object',
+          properties: {
+            operations: { type: 'array', items: { type: 'object', properties: { operation: { type: 'string' }, path: { type: 'string' }, value: {} }, required: ['operation', 'path'] } },
+            reply: { type: 'string' }
+          },
+          required: ['operations']
+        }
+      }
+    })
+  });
+  const data = await res.json();
+  if (!res.ok || data.error) return { operations: [] };
+  try { return JSON.parse((data.candidates?.[0]?.content?.parts?.[0]?.text || '{}').replace(/```json|```/g, '').trim()); }
+  catch { return { operations: [] }; }
+}
+
 export async function POST(req: NextRequest) {
   try {
-    const { resumeId, userId, value } = await req.json();
+    const { resumeId, userId, message, value } = await req.json();
     if (!resumeId || !userId) return NextResponse.json({ error: 'Missing resumeId or userId' }, { status: 400 });
     const supabase = client();
     const loaded = await supabase.from('resumes').select('*').eq('id', resumeId).eq('user_id', userId).single();
     if (loaded.error) throw loaded.error;
-    const parsed = JSON.parse(JSON.stringify(loaded.data.parsed_json || {}));
-    parsed.sections = parsed.sections || {};
-    const exp = Array.isArray(parsed.sections.experience) ? parsed.sections.experience : Array.isArray(parsed.experience) ? parsed.experience : [];
-    if (!exp.length) exp.push({ company: 'Company Name', bullets: [] });
-    parsed.sections.experience = exp;
-    exp[0].role = value || 'Title';
-    exp[0].title = value || 'Title';
-    const saved = await supabase.from('resumes').update({ parsed_json: parsed }).eq('id', resumeId).eq('user_id', userId).select('*').single();
+
+    let parsed = copy(loaded.data.parsed_json || {});
+    let operations = deterministicOps(String(message || value || ''));
+    let reply = '';
+    if (!operations.length && message) {
+      const ai = await geminiOps(String(message), parsed);
+      operations = Array.isArray(ai.operations) ? ai.operations : [];
+      reply = ai.reply || '';
+    }
+    if (!operations.length && value) operations = [{ operation: 'replace', path: 'experience.0.role', value }];
+    if (!operations.length) return NextResponse.json({ handled: false, reply: 'I understood that as chat, not a saved resume edit.' });
+
+    for (const op of operations) parsed = applyOp(parsed, op);
+    ensureFirstExperience(parsed);
+
+    const saved = await supabase
+      .from('resumes')
+      .update({ parsed_json: parsed, candidate_name: parsed.candidateName || parsed.name || loaded.data.candidate_name || null, headline: parsed.headline || parsed.title || loaded.data.headline || null })
+      .eq('id', resumeId)
+      .eq('user_id', userId)
+      .select('*')
+      .single();
     if (saved.error) throw saved.error;
-    return NextResponse.json({ resume: saved.data, reply: `Updated the first experience job title to "${value || 'Title'}". You should see the preview update now.` });
+
+    const count = operations.length;
+    return NextResponse.json({ resume: saved.data, reply: reply || `Saved ${count} resume edit${count === 1 ? '' : 's'}. You should see the preview update now.`, operations });
   } catch (e) {
     console.error(e);
     return NextResponse.json({ error: e instanceof Error ? e.message : 'Failed to edit resume' }, { status: 500 });
