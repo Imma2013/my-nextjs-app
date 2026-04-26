@@ -35,7 +35,7 @@ export async function GET(req: NextRequest) {
     if (!userId) return NextResponse.json({ error: 'Missing userId' }, { status: 400 });
 
     const response = await supabaseFetch(
-      `chat_sessions?user_id=eq.${encodeURIComponent(userId)}&select=*&order=updated_at.desc`,
+      `chat_sessions?user_id=eq.${encodeURIComponent(userId)}&select=*,resumes(id,title,file_name,summary,candidate_name,headline)&order=updated_at.desc`,
       { method: 'GET' }
     );
 
