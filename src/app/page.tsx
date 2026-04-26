@@ -1,11 +1,7 @@
 'use client';
 import { useState, useRef, useEffect } from 'react';
 
-type Message = {
-  role: 'user' | 'assistant';
-  content: string;
-};
-
+type Message = { role: 'user' | 'assistant'; content: string };
 type OptimizeResult = {
   score: number;
   strengths: string[];
@@ -13,7 +9,6 @@ type OptimizeResult = {
   suggestions: string[];
   optimized_summary: string;
 };
-
 type View = 'chat' | 'optimizer';
 
 const QUICK_ACTIONS = [
@@ -22,25 +17,43 @@ const QUICK_ACTIONS = [
   { label: 'Find Gaps', icon: '🔍', prompt: 'What are the most common skill gaps in resumes for tech roles?' },
 ];
 
+const ATTACH_OPTIONS = [
+  { label: 'Upload PDF or DOCX', icon: '📄' },
+  { label: 'Paste Resume Text', icon: '📋' },
+  { label: 'Add from LinkedIn', icon: '🔗' },
+];
+
 export default function Home() {
   const [view, setView] = useState<View>('chat');
-
-  // Chat state
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
+  const [showAttachMenu, setShowAttachMenu] = useState(false);
+  const [pastedResume, setPastedResume] = useState('');
+  const [showPasteModal, setShowPasteModal] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const attachMenuRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Optimizer state
+  // Optimizer
   const [resume, setResume] = useState('');
   const [jobDesc, setJobDesc] = useState('');
   const [result, setResult] = useState<OptimizeResult | null>(null);
   const [optimizeLoading, setOptimizeLoading] = useState(false);
   const [error, setError] = useState('');
 
+  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+
+  // Close attach menu on outside click
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    function handleClick(e: MouseEvent) {
+      if (attachMenuRef.current && !attachMenuRef.current.contains(e.target as Node)) {
+        setShowAttachMenu(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, []);
 
   async function sendMessage(text?: string) {
     const msg = text ?? input;
@@ -86,21 +99,52 @@ export default function Home() {
     }
   }
 
+  function handleAttachOption(label: string) {
+    setShowAttachMenu(false);
+    if (label === 'Upload PDF or DOCX') {
+      fileInputRef.current?.click();
+    } else if (label === 'Paste Resume Text') {
+      setShowPasteModal(true);
+    } else if (label === 'Add from LinkedIn') {
+      setInput(prev => prev + ' [LinkedIn profile attached] ');
+    }
+  }
+
+  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    // For now, send filename as context — full parsing can be added with a server action
+    setInput(prev => (prev + ` [Attached: ${file.name}]`).trim());
+    e.target.value = '';
+  }
+
+  function confirmPaste() {
+    if (pastedResume.trim()) {
+      setResume(pastedResume);
+      setView('optimizer');
+    }
+    setShowPasteModal(false);
+    setPastedResume('');
+  }
+
   const scoreColor = result
     ? result.score >= 75 ? 'text-green-400' : result.score >= 50 ? 'text-yellow-400' : 'text-red-400'
     : '';
 
   return (
-    <div className="flex h-screen bg-[#0f1117] text-white">
+    <div className="flex h-screen bg-[#0f1117] text-white overflow-hidden">
+      {/* Hidden file input */}
+      <input ref={fileInputRef} type="file" accept=".pdf,.docx" className="hidden" onChange={handleFileUpload} />
+
       {/* Sidebar */}
-      <aside className="w-14 flex flex-col items-center py-4 gap-4 bg-[#0a0c10] border-r border-white/5">
-        <div className="w-8 h-8 bg-blue-500 rounded-lg flex items-center justify-center font-bold text-sm">R</div>
+      <aside className="w-14 flex flex-col items-center py-4 gap-4 bg-[#0a0c10] border-r border-white/5 flex-shrink-0">
+        <div className="w-8 h-8 bg-blue-500 rounded-lg flex items-center justify-center font-bold text-sm select-none">R</div>
         <div className="mt-4 flex flex-col gap-3">
           <button onClick={() => setView('chat')} title="Chat"
             className={`w-9 h-9 rounded-lg flex items-center justify-center text-lg transition-all ${
               view === 'chat' ? 'bg-white/10 text-white' : 'text-white/30 hover:text-white/60'
             }`}>💬</button>
-          <button onClick={() => setView('optimizer')} title="Optimize Resume"
+          <button onClick={() => setView('optimizer')} title="Optimizer"
             className={`w-9 h-9 rounded-lg flex items-center justify-center text-lg transition-all ${
               view === 'optimizer' ? 'bg-white/10 text-white' : 'text-white/30 hover:text-white/60'
             }`}>📄</button>
@@ -111,10 +155,9 @@ export default function Home() {
       <main className="flex-1 flex flex-col overflow-hidden">
         {view === 'chat' ? (
           <>
-            {/* Chat messages */}
             <div className="flex-1 overflow-y-auto px-4 py-6">
               {messages.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-full gap-6">
+                <div className="flex flex-col items-center justify-center h-full gap-6 text-center">
                   <h1 className="text-2xl font-semibold text-white/90">How can AI Resume Agent help with your resume and job search?</h1>
                   <div className="flex flex-wrap gap-3 justify-center">
                     {QUICK_ACTIONS.map(a => (
@@ -128,29 +171,23 @@ export default function Home() {
               ) : (
                 <div className="max-w-3xl mx-auto space-y-6">
                   {messages.map((m, i) => (
-                    <div key={i} className={`flex gap-3 ${
-                      m.role === 'user' ? 'justify-end' : 'justify-start'
-                    }`}>
+                    <div key={i} className={`flex gap-3 ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                       {m.role === 'assistant' && (
                         <div className="w-7 h-7 rounded-full bg-blue-500 flex items-center justify-center text-xs font-bold flex-shrink-0 mt-1">R</div>
                       )}
-                      <div className={`max-w-[75%] px-4 py-3 rounded-2xl text-sm leading-relaxed ${
-                        m.role === 'user'
-                          ? 'bg-blue-600 text-white rounded-tr-sm'
-                          : 'bg-white/8 text-white/90 rounded-tl-sm border border-white/10'
-                      }`}>
-                        {m.content}
-                      </div>
+                      <div className={`max-w-[75%] px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${
+                        m.role === 'user' ? 'bg-blue-600 text-white rounded-tr-sm' : 'bg-white/8 text-white/90 rounded-tl-sm border border-white/10'
+                      }`}>{m.content}</div>
                     </div>
                   ))}
                   {chatLoading && (
                     <div className="flex gap-3">
                       <div className="w-7 h-7 rounded-full bg-blue-500 flex items-center justify-center text-xs font-bold flex-shrink-0">R</div>
                       <div className="bg-white/8 border border-white/10 px-4 py-3 rounded-2xl rounded-tl-sm">
-                        <span className="flex gap-1">
-                          <span className="w-1.5 h-1.5 bg-white/40 rounded-full animate-bounce" style={{animationDelay:"0ms"}} />
-                          <span className="w-1.5 h-1.5 bg-white/40 rounded-full animate-bounce" style={{animationDelay:"150ms"}} />
-                          <span className="w-1.5 h-1.5 bg-white/40 rounded-full animate-bounce" style={{animationDelay:"300ms"}} />
+                        <span className="flex gap-1 items-center">
+                          <span className="w-1.5 h-1.5 bg-white/40 rounded-full animate-bounce" style={{animationDelay:'0ms'}} />
+                          <span className="w-1.5 h-1.5 bg-white/40 rounded-full animate-bounce" style={{animationDelay:'150ms'}} />
+                          <span className="w-1.5 h-1.5 bg-white/40 rounded-full animate-bounce" style={{animationDelay:'300ms'}} />
                         </span>
                       </div>
                     </div>
@@ -160,29 +197,50 @@ export default function Home() {
               )}
             </div>
 
-            {/* Chat input bar */}
-            <div className="px-4 pb-6">
+            {/* Input bar */}
+            <div className="px-4 pb-6 flex-shrink-0">
               <div className="max-w-3xl mx-auto">
                 <div className="bg-white/5 border border-white/10 rounded-2xl p-3 flex flex-col gap-2">
-                  <textarea
-                    rows={2}
+                  <textarea rows={2}
                     className="w-full bg-transparent text-sm text-white/90 placeholder-white/25 resize-none focus:outline-none px-1"
                     placeholder="Describe your task or question, or attach a resume..."
                     value={input}
                     onChange={e => setInput(e.target.value)}
-                    onKeyDown={e => {
-                      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
-                    }}
+                    onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
                   />
                   <div className="flex items-center justify-between">
-                    <button onClick={() => setView('optimizer')}
-                      className="text-xs text-white/30 hover:text-white/60 flex items-center gap-1.5 transition-all">
-                      <span>📎</span> Attach a Resume
-                    </button>
+                    {/* Attach button with dropdown */}
+                    <div className="relative" ref={attachMenuRef}>
+                      <button
+                        onClick={() => setShowAttachMenu(v => !v)}
+                        className={`flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full border transition-all ${
+                          showAttachMenu
+                            ? 'bg-white/15 border-white/20 text-white'
+                            : 'bg-white/5 border-white/10 text-white/40 hover:text-white/70 hover:bg-white/10'
+                        }`}
+                      >
+                        <span className={`text-sm transition-transform duration-200 ${showAttachMenu ? 'rotate-45' : ''}`}>+</span>
+                        Attach a Resume
+                      </button>
+
+                      {showAttachMenu && (
+                        <div className="absolute bottom-full mb-2 left-0 bg-[#1a1d27] border border-white/10 rounded-xl shadow-xl overflow-hidden z-50 w-52">
+                          {ATTACH_OPTIONS.map(opt => (
+                            <button key={opt.label}
+                              onClick={() => handleAttachOption(opt.label)}
+                              className="w-full flex items-center gap-3 px-4 py-3 text-sm text-white/70 hover:bg-white/8 hover:text-white transition-all text-left"
+                            >
+                              <span>{opt.icon}</span>{opt.label}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
                     <button onClick={() => sendMessage()}
                       disabled={!input.trim() || chatLoading}
                       className="w-8 h-8 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-30 flex items-center justify-center transition-all">
-                      <span className="text-sm">↑</span>
+                      <span className="text-sm font-bold">↑</span>
                     </button>
                   </div>
                 </div>
@@ -190,13 +248,11 @@ export default function Home() {
             </div>
           </>
         ) : (
-          /* Optimizer View */
           <div className="flex-1 overflow-y-auto px-6 py-8">
             <div className="max-w-4xl mx-auto">
               <button onClick={() => setView('chat')} className="text-white/40 hover:text-white/70 text-sm mb-6 flex items-center gap-1 transition-all">← Back to Chat</button>
               <h2 className="text-2xl font-bold mb-1">Resume Optimizer</h2>
               <p className="text-white/40 text-sm mb-8">Paste your resume and a job description for an instant ATS score + rewrite.</p>
-
               <div className="grid md:grid-cols-2 gap-4 mb-4">
                 <div className="bg-white/5 border border-white/10 rounded-2xl p-5">
                   <label className="text-xs font-semibold text-white/50 uppercase tracking-wider mb-2 block">Your Resume</label>
@@ -211,7 +267,6 @@ export default function Home() {
                     value={jobDesc} onChange={e => setJobDesc(e.target.value)} />
                 </div>
               </div>
-
               {error && <p className="text-red-400 text-sm text-center mb-4">{error}</p>}
               <div className="text-center mb-8">
                 <button onClick={handleOptimize} disabled={optimizeLoading}
@@ -219,7 +274,6 @@ export default function Home() {
                   {optimizeLoading ? 'Analyzing...' : 'Optimize My Resume →'}
                 </button>
               </div>
-
               {result && (
                 <div className="space-y-4">
                   <div className="bg-white/5 border border-white/10 rounded-2xl p-8 text-center">
@@ -228,11 +282,11 @@ export default function Home() {
                   </div>
                   <div className="grid md:grid-cols-2 gap-4">
                     <div className="bg-white/5 border border-white/10 rounded-2xl p-5">
-                      <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">✅ Strengths</h3>
+                      <h3 className="text-sm font-semibold mb-3">✅ Strengths</h3>
                       <ul className="space-y-1.5">{result.strengths.map((s, i) => <li key={i} className="text-xs text-white/60">• {s}</li>)}</ul>
                     </div>
                     <div className="bg-white/5 border border-white/10 rounded-2xl p-5">
-                      <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">⚠️ Gaps</h3>
+                      <h3 className="text-sm font-semibold mb-3">⚠️ Gaps</h3>
                       <ul className="space-y-1.5">{result.gaps.map((g, i) => <li key={i} className="text-xs text-white/60">• {g}</li>)}</ul>
                     </div>
                   </div>
@@ -250,6 +304,28 @@ export default function Home() {
           </div>
         )}
       </main>
+
+      {/* Paste Resume Modal */}
+      {showPasteModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-[#1a1d27] border border-white/10 rounded-2xl p-6 w-full max-w-lg">
+            <h3 className="font-semibold mb-3">Paste Your Resume</h3>
+            <textarea
+              className="w-full h-48 bg-white/5 border border-white/10 rounded-xl p-3 text-sm text-white/80 resize-none focus:outline-none placeholder-white/25"
+              placeholder="Paste your resume text here..."
+              value={pastedResume}
+              onChange={e => setPastedResume(e.target.value)}
+              autoFocus
+            />
+            <div className="flex gap-3 mt-4 justify-end">
+              <button onClick={() => { setShowPasteModal(false); setPastedResume(''); }}
+                className="px-4 py-2 text-sm text-white/40 hover:text-white/70 transition-all">Cancel</button>
+              <button onClick={confirmPaste}
+                className="px-4 py-2 text-sm bg-blue-600 hover:bg-blue-500 rounded-lg font-medium transition-all">Use This Resume →</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
