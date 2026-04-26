@@ -72,7 +72,7 @@ async function saveMessages(sessionId: string, userId: string, userMessage: Chat
 
 export async function POST(req: NextRequest) {
   try {
-    const { messages, userId, sessionId } = await req.json();
+    const { messages, userId, sessionId, resumeId } = await req.json();
 
     if (!Array.isArray(messages) || messages.length === 0) {
       return NextResponse.json({ error: 'Missing messages' }, { status: 400 });
@@ -81,9 +81,18 @@ export async function POST(req: NextRequest) {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) return NextResponse.json({ error: 'API key not configured' }, { status: 500 });
 
-    const contents = messages.map((m: ChatMessage) => ({
+    let resumeContext = '';
+    if (userId && resumeId && getSupabaseConfig()) {
+      const resp = await supabaseFetch(`resumes?id=eq.${encodeURIComponent(resumeId)}&user_id=eq.${encodeURIComponent(userId)}&select=title,raw_text,summary,candidate_name,headline`, { method: 'GET' });
+      if (resp.ok) {
+        const resume = (await resp.json())?.[0];
+        if (resume) resumeContext = `\n\nUploaded resume context:\nTitle: ${resume.title || 'Uploaded Resume'}\nCandidate: ${resume.candidate_name || 'Unknown'}\nHeadline: ${resume.headline || 'Unknown'}\nSummary: ${resume.summary || ''}\n\nResume text:\n${(resume.raw_text || '').slice(0, 12000)}`;
+      }
+    }
+
+    const contents = messages.map((m: ChatMessage, index: number) => ({
       role: m.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: m.content }],
+      parts: [{ text: index === messages.length - 1 && m.role === 'user' ? `${m.content}${resumeContext}` : m.content }],
     }));
 
     const response = await fetch(
