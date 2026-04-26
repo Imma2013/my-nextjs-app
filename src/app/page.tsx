@@ -270,7 +270,7 @@ I can now use this resume as context. Tell me the job/company you want to target
       <main className="flex-1 flex flex-col overflow-hidden bg-[#f7f8fb] p-6">
         {view === 'chat' ? (
           <>
-            <div className="mb-4 flex items-center justify-between"><button onClick={loadSessions} className="rounded-md border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-700 shadow-sm">↺ RECENT CHATS</button><button onClick={startNewChat} className="rounded-md bg-blue-600 px-4 py-2 text-xs font-bold text-white shadow-sm">+ NEW CHAT</button></div>
+            <div className="mb-4 flex items-center justify-between"><button onClick={() => loadSessions()} className="rounded-md border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-700 shadow-sm">↺ RECENT CHATS</button><button onClick={startNewChat} className="rounded-md bg-blue-600 px-4 py-2 text-xs font-bold text-white shadow-sm">+ NEW CHAT</button></div>
             <div className="flex-1 overflow-y-auto px-6 py-6 rounded-xl border border-slate-200 bg-white shadow-sm">
               {messages.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-full gap-6 text-center">
