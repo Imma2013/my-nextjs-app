@@ -112,6 +112,10 @@ export async function POST(req: NextRequest) {
       const session = existingSession ?? await createSession(userId, lastUser.content);
       activeSessionId = session.id;
 
+      if (!activeSessionId) {
+        throw new Error('Failed to create chat session');
+      }
+
       await saveMessages(
         activeSessionId,
         userId,
