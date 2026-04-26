@@ -31,6 +31,7 @@ export default function Home() {
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [pastedResume, setPastedResume] = useState('');
   const [showPasteModal, setShowPasteModal] = useState(false);
+  const [uploadingFile, setUploadingFile] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const attachMenuRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -44,7 +45,6 @@ export default function Home() {
 
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
-  // Close attach menu on outside click
   useEffect(() => {
     function handleClick(e: MouseEvent) {
       if (attachMenuRef.current && !attachMenuRef.current.contains(e.target as Node)) {
@@ -113,9 +113,32 @@ export default function Home() {
   async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
-    // For now, send filename as context — full parsing can be added with a server action
-    setInput(prev => (prev + ` [Attached: ${file.name}]`).trim());
-    e.target.value = '';
+
+    setUploadingFile(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const res = await fetch('/api/parse-resume', {
+        method: 'POST',
+        body: formData,
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to parse file');
+
+      // Send the parsed text as a message
+      const resumeText = data.text;
+      const msg = `[Attached: ${file.name}] Here's my resume:\n\n${resumeText.substring(0, 2000)}${resumeText.length > 2000 ? '...' : ''}`;
+      setInput(msg);
+
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : 'Failed to parse file';
+      setMessages(prev => [...prev, { role: 'assistant', content: `❌ ${errMsg}` }]);
+    } finally {
+      setUploadingFile(false);
+      e.target.value = '';
+    }
   }
 
   function confirmPaste() {
@@ -133,7 +156,6 @@ export default function Home() {
 
   return (
     <div className="flex h-screen bg-[#0f1117] text-white overflow-hidden">
-      {/* Hidden file input */}
       <input ref={fileInputRef} type="file" accept=".pdf,.docx" className="hidden" onChange={handleFileUpload} />
 
       {/* Sidebar */}
@@ -200,6 +222,9 @@ export default function Home() {
             {/* Input bar */}
             <div className="px-4 pb-6 flex-shrink-0">
               <div className="max-w-3xl mx-auto">
+                {uploadingFile && (
+                  <div className="mb-2 text-xs text-white/40 text-center">Parsing resume file...</div>
+                )}
                 <div className="bg-white/5 border border-white/10 rounded-2xl p-3 flex flex-col gap-2">
                   <textarea rows={2}
                     className="w-full bg-transparent text-sm text-white/90 placeholder-white/25 resize-none focus:outline-none px-1"
@@ -207,13 +232,14 @@ export default function Home() {
                     value={input}
                     onChange={e => setInput(e.target.value)}
                     onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
+                    disabled={uploadingFile}
                   />
                   <div className="flex items-center justify-between">
-                    {/* Attach button with dropdown */}
                     <div className="relative" ref={attachMenuRef}>
                       <button
                         onClick={() => setShowAttachMenu(v => !v)}
-                        className={`flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full border transition-all ${
+                        disabled={uploadingFile}
+                        className={`flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full border transition-all disabled:opacity-40 ${
                           showAttachMenu
                             ? 'bg-white/15 border-white/20 text-white'
                             : 'bg-white/5 border-white/10 text-white/40 hover:text-white/70 hover:bg-white/10'
@@ -238,7 +264,7 @@ export default function Home() {
                     </div>
 
                     <button onClick={() => sendMessage()}
-                      disabled={!input.trim() || chatLoading}
+                      disabled={!input.trim() || chatLoading || uploadingFile}
                       className="w-8 h-8 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-30 flex items-center justify-center transition-all">
                       <span className="text-sm font-bold">↑</span>
                     </button>
