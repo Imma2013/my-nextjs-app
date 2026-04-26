@@ -2,7 +2,7 @@
 import { useState, useRef, useEffect } from 'react';
 
 type Message = { role: 'user' | 'assistant'; content: string; created_at?: string };
-type ResumeContext = { id: string; title: string; file_name?: string; summary?: string; candidate_name?: string; headline?: string };
+type ResumeContext = { id: string; title: string; file_name?: string; summary?: string; candidate_name?: string; headline?: string; mime_type?: string; preview_url?: string };
 type ChatSession = { id: string; user_id: string; title: string; resume_id?: string | null; resumes?: ResumeContext | null; created_at: string; updated_at: string };
 type OptimizeResult = {
   score: number;
@@ -321,6 +321,7 @@ I can now use this resume as context. Tell me the job/company you want to target
                         <div className="text-xs uppercase tracking-wide text-blue-600 mb-1">Resume Uploaded</div>
                         <div className="font-semibold text-slate-900">{activeResume.candidate_name || activeResume.title || 'Uploaded Resume'}</div>
                         <div className="text-sm text-slate-600 mt-1">{activeResume.summary || activeResume.file_name || 'Gemini parsed this resume and saved it for this chat.'}</div>
+                        {activeResume.preview_url && <embed src={activeResume.preview_url} type="application/pdf" className="mt-4 h-[520px] w-full rounded-xl border border-slate-200 bg-white" />}
                       </div>
                       <div className="text-blue-600 text-xl">✓</div>
                     </div>
