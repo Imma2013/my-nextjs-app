@@ -7,7 +7,57 @@
   --background-start: 248, 250, 252;
 }
 
+html,
+body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
 body {
   color: rgb(var(--foreground-rgb));
   background: rgb(var(--background-start));
+  overscroll-behavior: none;
+}
+
+/* App shell: keep the browser page fixed so only inner panes scroll. */
+body > div {
+  height: 100dvh;
+  overflow: hidden;
+}
+
+main,
+main section,
+main aside {
+  min-height: 0;
+}
+
+main {
+  height: 100%;
+  overflow: hidden;
+}
+
+main > section {
+  overflow: hidden;
+}
+
+/* Workspace left document column and right chat column. */
+main > section > div:first-child,
+main > section > aside {
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Resume preview body and chat history body become the only scroll regions. */
+main > section > div:first-child > div:last-child,
+main > section > aside > div:nth-child(2) {
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+}
+
+/* Keep the right-side composer pinned at the bottom. */
+main > section > aside > div:last-child {
+  flex-shrink: 0;
 }
