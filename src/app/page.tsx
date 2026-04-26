@@ -269,119 +269,126 @@ I can now use this resume as context. Tell me the job/company you want to target
       {/* Main */}
       <main className="flex-1 flex flex-col overflow-hidden bg-[#f7f8fb] p-6">
         {view === 'chat' ? (
-          <>
-            <div className="mb-4 flex items-center justify-between"><button onClick={() => loadSessions()} className="rounded-md border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-700 shadow-sm">↺ RECENT CHATS</button><button onClick={startNewChat} className="rounded-md bg-blue-600 px-4 py-2 text-xs font-bold text-white shadow-sm">+ NEW CHAT</button></div>
-            <div className="flex-1 overflow-y-auto px-6 py-6 rounded-xl border border-slate-200 bg-white shadow-sm">
-              {messages.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-full gap-6 text-center">
-                  <h1 className="text-2xl font-semibold text-slate-900">How can AI Resume Agent help with your resume and job search?</h1>
-                  <div className="flex flex-wrap gap-3 justify-center">
-                    {QUICK_ACTIONS.map(a => (
-                      <button key={a.label} onClick={() => sendMessage(a.prompt)}
-                        className="flex items-center gap-2 bg-white/5 hover:bg-white/10 border border-white/10 px-4 py-2.5 rounded-full text-sm font-medium transition-all">
-                        <span>{a.icon}</span>{a.label}
-                      </button>
-                    ))}
+          <div className="flex-1 min-h-0 flex flex-col gap-4">
+            <div className="flex items-center justify-between">
+              <button onClick={() => loadSessions()} className="rounded-md border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-700 shadow-sm hover:bg-slate-50">↺ RECENT CHATS</button>
+              <button onClick={startNewChat} className="rounded-md bg-blue-600 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-blue-500">+ NEW CHAT</button>
+            </div>
+
+            <div className="flex-1 min-h-0 grid grid-cols-[minmax(0,1fr)_430px] rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+              <section className="min-w-0 flex flex-col border-r border-slate-200">
+                <div className="h-[60px] flex items-center justify-center border-b border-slate-200">
+                  <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 p-1">
+                    <button className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm">RESUME</button>
+                    <button onClick={() => sendMessage('Help me tailor this resume to a specific job search.')} className="rounded-md px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-white">JOB SEARCH</button>
                   </div>
                 </div>
-              ) : (
-                <div className="max-w-5xl mx-auto space-y-6">
-                  {messages.map((m, i) => (
-                    <div key={i} className={`flex gap-3 ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                      {m.role === 'assistant' && (
-                        <div className="w-7 h-7 rounded-full bg-[#332071] flex items-center justify-center text-xs font-bold flex-shrink-0 mt-1">R</div>
-                      )}
-                      <div className={`max-w-[75%] px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${
-                        m.role === 'user' ? 'bg-blue-600 text-white rounded-tr-sm' : 'bg-white text-slate-800 rounded-tl-sm border border-slate-200 shadow-sm'
-                      }`}>{m.content}</div>
+
+                <div className="h-[52px] flex items-center justify-between border-b border-slate-200 px-5">
+                  <h2 className="text-sm font-medium text-slate-800">Resume</h2>
+                  <button onClick={() => setView('optimizer')} className="rounded-md border border-slate-300 bg-white px-4 py-2 text-xs font-bold text-slate-800 hover:bg-slate-50">⚙ OPEN IN RESUME BUILDER</button>
+                </div>
+
+                <div className="flex-1 min-h-0 overflow-auto bg-[#f0f2f5] p-7">
+                  {activeResume?.preview_url ? (
+                    <div className="mx-auto max-w-[900px] overflow-hidden rounded-sm bg-white shadow-sm ring-1 ring-slate-200">
+                      <embed src={activeResume.preview_url} type="application/pdf" className="h-[calc(100vh-260px)] min-h-[720px] w-full bg-white" />
                     </div>
-                  ))}
-                  {chatLoading && (
-                    <div className="flex gap-3">
-                      <div className="w-7 h-7 rounded-full bg-[#332071] flex items-center justify-center text-xs font-bold flex-shrink-0">R</div>
-                      <div className="bg-white border border-slate-200 px-4 py-3 rounded-2xl rounded-tl-sm shadow-sm">
-                        <span className="flex gap-1 items-center">
-                          <span className="w-1.5 h-1.5 bg-white/40 rounded-full animate-bounce" style={{animationDelay:'0ms'}} />
-                          <span className="w-1.5 h-1.5 bg-white/40 rounded-full animate-bounce" style={{animationDelay:'150ms'}} />
-                          <span className="w-1.5 h-1.5 bg-white/40 rounded-full animate-bounce" style={{animationDelay:'300ms'}} />
-                        </span>
+                  ) : (
+                    <div className="mx-auto min-h-[720px] max-w-[850px] bg-white px-16 py-14 text-slate-800 shadow-sm ring-1 ring-slate-200">
+                      <div className="text-center border-b border-slate-200 pb-6 mb-6">
+                        <h1 className="font-serif text-3xl font-bold text-slate-700">{activeResume?.candidate_name || 'Your Name'}</h1>
+                        <p className="mt-2 text-[11px] uppercase tracking-wide text-slate-500">⌖ YOUR CITY &nbsp; ✉ NO_REPLY@EXAMPLE.COM &nbsp; ▯ (123)456-7890</p>
+                      </div>
+                      <section className="mb-5">
+                        <h3 className="font-serif text-lg font-semibold uppercase text-slate-700 border-b border-slate-800">Experience</h3>
+                        <div className="mt-2 grid grid-cols-[1fr_auto] gap-x-4 text-sm">
+                          <div><p className="font-semibold">Job Title</p><p>Company Name</p></div>
+                          <p className="font-serif text-xs font-semibold uppercase">MONTH 20XX - PRESENT, Location</p>
+                        </div>
+                        <ul className="mt-1 list-disc pl-4 text-sm leading-6 text-slate-600">
+                          <li>Lorem ipsum dolor sit amet, consectetur adipiscing elit.</li>
+                          <li>Aenean ac interdum nisi.</li>
+                          <li>Sed in consequat mi.</li>
+                          <li>Sed pulvinar lacinia felis eu finibus.</li>
+                        </ul>
+                      </section>
+                      <section className="mb-5"><h3 className="font-serif text-lg font-semibold uppercase text-slate-700 border-b border-slate-800">Education</h3><p className="mt-2 font-semibold">Degree</p><p className="text-sm text-slate-600">College Name · Location · MONTH 20XX-MONTH 20XX</p></section>
+                      <section><h3 className="font-serif text-lg font-semibold uppercase text-slate-700 border-b border-slate-800">Skills</h3><p className="mt-2 text-sm text-slate-600">{activeResume?.headline || 'Upload a resume and Gemini will save it as chat context here.'}</p></section>
+                    </div>
+                  )}
+                </div>
+              </section>
+
+              <aside className="min-w-0 flex flex-col bg-white">
+                <div className="h-[60px] flex items-center justify-between border-b border-slate-200 px-5">
+                  <div className="flex items-center gap-2">
+                    <button className="rounded-lg bg-slate-100 px-4 py-2 text-xs font-bold text-slate-900">💬 CHAT</button>
+                    <button className="rounded-lg px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50">▤ CONTEXT</button>
+                  </div>
+                  <button className="text-xl text-slate-500">▣</button>
+                </div>
+
+                <div className="flex-1 min-h-0 overflow-y-auto px-5 py-5 space-y-5">
+                  {activeResume && (
+                    <div className="w-40 rounded-lg border border-slate-200 bg-white p-2 shadow-sm">
+                      <div className="h-20 rounded bg-slate-100 border border-slate-200 flex items-center justify-center text-[10px] text-blue-600 font-bold">AI AGENT</div>
+                      <div className="mt-2 flex items-center justify-between">
+                        <div><p className="text-sm font-bold text-slate-800">Resume</p><p className="text-xs text-slate-500">Resume Uploaded</p></div>
+                        <span className="text-blue-600 text-xl">✓</span>
                       </div>
                     </div>
                   )}
-                  <div ref={messagesEndRef} />
-                </div>
-              )}
-            </div>
 
-
-                {activeResume && (
-                  <div className="max-w-3xl mx-auto mb-3 rounded-2xl border border-slate-200 bg-white shadow-sm p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="text-xs uppercase tracking-wide text-blue-600 mb-1">Resume Uploaded</div>
-                        <div className="font-semibold text-slate-900">{activeResume.candidate_name || activeResume.title || 'Uploaded Resume'}</div>
-                        <div className="text-sm text-slate-600 mt-1">{activeResume.summary || activeResume.file_name || 'Gemini parsed this resume and saved it for this chat.'}</div>
-                        {activeResume.preview_url && <embed src={activeResume.preview_url} type="application/pdf" className="mt-4 h-[520px] w-full rounded-xl border border-slate-200 bg-white" />}
-                      </div>
-                      <div className="text-blue-600 text-xl">✓</div>
+                  {messages.length === 0 ? (
+                    <div className="text-[15px] leading-7 text-slate-800">
+                      <p>{activeResume ? `I received your resume${activeResume.candidate_name ? ` for ${activeResume.candidate_name}` : ''}.` : 'Upload a resume or ask me a resume question to get started.'}</p>
+                      <p className="mt-4">I can run a quick analysis, tailor it to a tech role, or help improve your bullet points.</p>
                     </div>
-                  </div>
-                )}
-
-            {/* Input bar */}
-            <div className="px-4 pb-6 flex-shrink-0">
-              <div className="max-w-3xl mx-auto">
-                {uploadingFile && (
-                  <div className="mb-2 text-xs text-slate-500 text-center">Parsing and saving resume context with Gemini...</div>
-                )}
-                <div className="bg-white border-2 border-blue-500 rounded-md p-3 flex flex-col gap-2 shadow-sm">
-                  <textarea rows={2}
-                    className="w-full bg-transparent text-sm text-slate-900 placeholder-slate-400 resize-none focus:outline-none px-1"
-                    placeholder="Write a reply..."
-                    value={input}
-                    onChange={e => setInput(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
-                    disabled={uploadingFile}
-                  />
-                  <div className="flex items-center justify-between">
-                    <div className="relative" ref={attachMenuRef}>
-                      <button
-                        onClick={() => setShowAttachMenu(v => !v)}
-                        disabled={uploadingFile}
-                        className={`flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full border transition-all disabled:opacity-40 ${
-                          showAttachMenu
-                            ? 'bg-slate-200 border-slate-300 text-slate-900'
-                            : 'bg-slate-100 border-slate-200 text-slate-600 hover:text-slate-900 hover:bg-slate-200'
-                        }`}
-                      >
-                        <span className={`text-sm transition-transform duration-200 ${showAttachMenu ? 'rotate-45' : ''}`}>+</span>
-                        Attach a Resume
-                      </button>
-
-                      {showAttachMenu && (
-                        <div className="absolute bottom-full mb-2 left-0 bg-white border border-slate-200 rounded-xl shadow-xl overflow-hidden z-50 w-52">
-                          {ATTACH_OPTIONS.map(opt => (
-                            <button key={opt.label}
-                              onClick={() => handleAttachOption(opt.label)}
-                              className="w-full flex items-center gap-3 px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 transition-all text-left"
-                            >
-                              <span>{opt.icon}</span>{opt.label}
-                            </button>
-                          ))}
+                  ) : (
+                    <div className="space-y-5">
+                      {messages.map((m, i) => (
+                        <div key={i} className={m.role === 'user' ? 'rounded-xl bg-slate-100 px-4 py-3 text-[15px] leading-7 text-slate-900' : 'text-[15px] leading-7 text-slate-800'}>
+                          <div className="whitespace-pre-wrap">{m.content}</div>
                         </div>
-                      )}
+                      ))}
+                      {chatLoading && <div className="text-sm text-slate-500">Thinking...</div>}
+                      <div ref={messagesEndRef} />
                     </div>
+                  )}
+                </div>
 
-                    <button onClick={() => sendMessage()}
-                      disabled={!input.trim() || chatLoading || uploadingFile}
-                      className="w-8 h-8 rounded-full bg-slate-200 hover:bg-blue-600 hover:text-white disabled:opacity-30 text-slate-500 flex items-center justify-center transition-all">
-                      <span className="text-sm font-bold">↑</span>
-                    </button>
+                <div className="border-t border-slate-100 p-5">
+                  {uploadingFile && <div className="mb-2 text-xs text-slate-500">Parsing and saving resume context with Gemini...</div>}
+                  <div className="rounded-md border-2 border-blue-500 bg-white p-3 focus-within:ring-2 focus-within:ring-blue-100">
+                    <textarea rows={3}
+                      className="w-full resize-none bg-transparent text-sm text-slate-900 placeholder-slate-400 focus:outline-none"
+                      placeholder="Write a reply..."
+                      value={input}
+                      onChange={e => setInput(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
+                      disabled={uploadingFile}
+                    />
+                    <div className="flex items-center justify-between">
+                      <div className="relative" ref={attachMenuRef}>
+                        <button onClick={() => setShowAttachMenu(v => !v)} disabled={uploadingFile} className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-xl font-bold text-slate-700 hover:bg-slate-200 disabled:opacity-40">+</button>
+                        {showAttachMenu && (
+                          <div className="absolute bottom-full mb-2 left-0 bg-white border border-slate-200 rounded-xl shadow-xl overflow-hidden z-50 w-52">
+                            {ATTACH_OPTIONS.map(opt => (
+                              <button key={opt.label} onClick={() => handleAttachOption(opt.label)} className="w-full flex items-center gap-3 px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 text-left">
+                                <span>{opt.icon}</span>{opt.label}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <button onClick={() => sendMessage()} disabled={!input.trim() || chatLoading || uploadingFile} className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-200 text-slate-500 hover:bg-blue-600 hover:text-white disabled:opacity-40">↑</button>
+                    </div>
                   </div>
                 </div>
-              </div>
+              </aside>
             </div>
-          </>
+          </div>
         ) : (
           <div className="flex-1 overflow-y-auto px-6 py-8">
             <div className="max-w-4xl mx-auto">
