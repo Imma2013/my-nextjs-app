@@ -53,8 +53,12 @@ export async function POST(req: NextRequest) {
 
 Return ONLY valid JSON with this exact shape:
 {
-  "text": "plain text resume content with readable sections and line breaks",
-  "summary": "one short sentence describing what was extracted"
+  "resumeText": "clean plain text resume content with readable sections and line breaks",
+  "candidateName": "candidate name if visible, otherwise empty string",
+  "headline": "current title or short professional headline if visible, otherwise empty string",
+  "summary": "one short sentence describing what was extracted",
+  "issues": [],
+  "sections": { "experience": [], "education": [], "skills": [], "projects": [], "awards": [] }
 }
 
 Rules:
@@ -97,7 +101,7 @@ Rules:
 
     const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text ?? '{}';
     const parsed = JSON.parse(cleanGeminiJson(rawText));
-    const text = typeof parsed.text === 'string' ? parsed.text.trim() : '';
+    const text = typeof parsed.resumeText === 'string' ? parsed.resumeText.trim() : typeof parsed.text === 'string' ? parsed.text.trim() : '';
 
     if (!text) {
       return NextResponse.json({ error: 'Gemini could not extract readable text from this file.' }, { status: 422 });
@@ -105,7 +109,11 @@ Rules:
 
     return NextResponse.json({
       text,
+      parsed,
       summary: typeof parsed.summary === 'string' ? parsed.summary : 'Attachment processed by Gemini.',
+      candidateName: typeof parsed.candidateName === 'string' ? parsed.candidateName : '',
+      headline: typeof parsed.headline === 'string' ? parsed.headline : '',
+      issues: Array.isArray(parsed.issues) ? parsed.issues : [],
       fileName: file.name,
       mimeType,
       processedBy: GEMINI_MODEL,
