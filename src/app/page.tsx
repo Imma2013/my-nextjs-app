@@ -94,6 +94,21 @@ export default function Home() {
     setMessages(next);
     setBusy(true);
     try {
+      if (activeResume && /\b(edit|change|update|replace|rename|set|make)\b/i.test(msg) && /job title|title|role|position/i.test(msg)) {
+        const value = /just\s+title/i.test(msg) ? 'Title' : undefined;
+        const editRes = await fetch('/api/resume-edit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ resumeId: activeResume.id, userId, message: msg, value }),
+        });
+        const editData = await editRes.json();
+        if (editRes.ok && editData.resume) {
+          setActiveResume(editData.resume);
+          setMessages([...next, { role: 'assistant', content: editData.reply || 'Updated the resume preview.' }]);
+          await loadSessions();
+          return;
+        }
+      }
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
