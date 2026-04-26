@@ -1,7 +1,8 @@
 'use client';
 import { useState, useRef, useEffect } from 'react';
 
-type Message = { role: 'user' | 'assistant'; content: string };
+type Message = { role: 'user' | 'assistant'; content: string; created_at?: string };
+type ChatSession = { id: string; user_id: string; title: string; created_at: string; updated_at: string };
 type OptimizeResult = {
   score: number;
   strengths: string[];
@@ -26,6 +27,10 @@ const ATTACH_OPTIONS = [
 export default function Home() {
   const [view, setView] = useState<View>('chat');
   const [messages, setMessages] = useState<Message[]>([]);
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [userId, setUserId] = useState('');
+  const [loadingSessions, setLoadingSessions] = useState(false);
   const [input, setInput] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
@@ -44,6 +49,58 @@ export default function Home() {
   const [error, setError] = useState('');
 
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+
+  useEffect(() => {
+    const existing = localStorage.getItem('resume-agent-user-id');
+    const id = existing ?? `guest-${crypto.randomUUID()}`;
+    if (!existing) localStorage.setItem('resume-agent-user-id', id);
+    setUserId(id);
+  }, []);
+
+  useEffect(() => {
+    if (!userId) return;
+    loadSessions(userId);
+  }, [userId]);
+
+  async function loadSessions(currentUserId = userId) {
+    if (!currentUserId) return;
+    setLoadingSessions(true);
+    try {
+      const res = await fetch(`/api/chat/sessions?userId=${encodeURIComponent(currentUserId)}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to load chats');
+      setSessions(data.sessions ?? []);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoadingSessions(false);
+    }
+  }
+
+  async function loadChat(sessionId: string) {
+    if (!userId) return;
+    setChatLoading(true);
+    try {
+      const res = await fetch(`/api/chat/sessions/${sessionId}?userId=${encodeURIComponent(userId)}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to load chat');
+      setActiveSessionId(sessionId);
+      setMessages(data.messages ?? []);
+      setView('chat');
+    } catch (e: unknown) {
+      setMessages([{ role: 'assistant', content: '❌ ' + (e instanceof Error ? e.message : 'Failed to load chat') }]);
+    } finally {
+      setChatLoading(false);
+    }
+  }
+
+  function startNewChat() {
+    setActiveSessionId(null);
+    setMessages([]);
+    setInput('');
+    setView('chat');
+  }
+
 
   useEffect(() => {
     function handleClick(e: MouseEvent) {
@@ -66,11 +123,13 @@ export default function Home() {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: newMessages }),
+        body: JSON.stringify({ messages: newMessages, userId, sessionId: activeSessionId }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Error');
       setMessages([...newMessages, { role: 'assistant', content: data.reply }]);
+      if (data.sessionId) setActiveSessionId(data.sessionId);
+      await loadSessions();
     } catch (e: unknown) {
       setMessages([...newMessages, { role: 'assistant', content: '❌ ' + (e instanceof Error ? e.message : 'Something went wrong') }]);
     } finally {
@@ -159,17 +218,39 @@ export default function Home() {
       <input ref={fileInputRef} type="file" accept=".pdf,.docx" className="hidden" onChange={handleFileUpload} />
 
       {/* Sidebar */}
-      <aside className="w-14 flex flex-col items-center py-4 gap-4 bg-[#0a0c10] border-r border-white/5 flex-shrink-0">
-        <div className="w-8 h-8 bg-blue-500 rounded-lg flex items-center justify-center font-bold text-sm select-none">R</div>
-        <div className="mt-4 flex flex-col gap-3">
-          <button onClick={() => setView('chat')} title="Chat"
-            className={`w-9 h-9 rounded-lg flex items-center justify-center text-lg transition-all ${
-              view === 'chat' ? 'bg-white/10 text-white' : 'text-white/30 hover:text-white/60'
-            }`}>💬</button>
-          <button onClick={() => setView('optimizer')} title="Optimizer"
-            className={`w-9 h-9 rounded-lg flex items-center justify-center text-lg transition-all ${
-              view === 'optimizer' ? 'bg-white/10 text-white' : 'text-white/30 hover:text-white/60'
-            }`}>📄</button>
+      <aside className="w-64 flex flex-col py-4 bg-[#0a0c10] border-r border-white/5 flex-shrink-0 overflow-hidden">
+        <div className="px-3 flex items-center gap-2 mb-4">
+          <div className="w-8 h-8 bg-blue-500 rounded-lg flex items-center justify-center font-bold text-sm select-none">R</div>
+          <div className="font-semibold text-sm text-white/80">Resume Agent</div>
+        </div>
+
+        <div className="px-3 space-y-2">
+          <button onClick={startNewChat}
+            className="w-full flex items-center justify-center gap-2 rounded-xl bg-blue-600 hover:bg-blue-500 px-3 py-2 text-sm font-medium transition-all">
+            + New chat
+          </button>
+          <button onClick={() => setView('optimizer')}
+            className={`w-full flex items-center gap-2 rounded-xl px-3 py-2 text-sm transition-all ${view === 'optimizer' ? 'bg-white/10 text-white' : 'text-white/50 hover:bg-white/5 hover:text-white'}`}>
+            📄 Optimizer
+          </button>
+        </div>
+
+        <div className="mt-5 px-3 text-xs uppercase tracking-wide text-white/25">Saved chats</div>
+        <div className="mt-2 flex-1 overflow-y-auto px-2 space-y-1">
+          {loadingSessions ? (
+            <div className="px-3 py-2 text-xs text-white/35">Loading...</div>
+          ) : sessions.length === 0 ? (
+            <div className="px-3 py-2 text-xs text-white/35">No saved chats yet</div>
+          ) : sessions.map(session => (
+            <button key={session.id} onClick={() => loadChat(session.id)}
+              className={`w-full text-left px-3 py-2 rounded-lg text-sm truncate transition-all ${
+                activeSessionId === session.id ? 'bg-white/12 text-white' : 'text-white/55 hover:bg-white/6 hover:text-white/85'
+              }`}
+              title={session.title}
+            >
+              💬 {session.title}
+            </button>
+          ))}
         </div>
       </aside>
 
