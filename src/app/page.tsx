@@ -1,8 +1,9 @@
 'use client';
 import { useState, useRef, useEffect } from 'react';
+import ResumeDocument from '@/components/ResumeDocument';
 
 type Message = { role: 'user' | 'assistant'; content: string; created_at?: string };
-type ResumeContext = { id: string; title: string; file_name?: string; summary?: string; candidate_name?: string; headline?: string; mime_type?: string; preview_url?: string };
+type ResumeContext = { id: string; title: string; file_name?: string; summary?: string; candidate_name?: string; headline?: string; mime_type?: string; preview_url?: string; raw_text?: string; parsed_json?: any };
 type ChatSession = { id: string; user_id: string; title: string; resume_id?: string | null; resumes?: ResumeContext | null; created_at: string; updated_at: string };
 type OptimizeResult = {
   score: number;
@@ -63,6 +64,18 @@ export default function Home() {
     if (!userId) return;
     loadSessions(userId);
   }, [userId]);
+
+
+  useEffect(() => {
+    if (!activeResume?.id) return;
+    const channel = supabase
+      .channel(`resume-${activeResume.id}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'resumes', filter: `id=eq.${activeResume.id}` }, payload => {
+        setActiveResume(prev => prev?.id === payload.new.id ? { ...prev, ...payload.new } as ResumeContext : prev);
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [activeResume?.id]);
 
   async function loadSessions(currentUserId = userId) {
     if (!currentUserId) return;
@@ -290,31 +303,10 @@ I can now use this resume as context. Tell me the job/company you want to target
                 </div>
 
                 <div className="flex-1 min-h-0 overflow-auto bg-[#f0f2f5] p-7">
-                  {activeResume?.preview_url ? (
-                    <div className="mx-auto max-w-[900px] overflow-hidden rounded-sm bg-white shadow-sm ring-1 ring-slate-200">
-                      <embed src={activeResume.preview_url} type="application/pdf" className="h-[calc(100vh-260px)] min-h-[720px] w-full bg-white" />
-                    </div>
-                  ) : (
-                    <div className="mx-auto min-h-[720px] max-w-[850px] bg-white px-16 py-14 text-slate-800 shadow-sm ring-1 ring-slate-200">
-                      <div className="text-center border-b border-slate-200 pb-6 mb-6">
-                        <h1 className="font-serif text-3xl font-bold text-slate-700">{activeResume?.candidate_name || 'Your Name'}</h1>
-                        <p className="mt-2 text-[11px] uppercase tracking-wide text-slate-500">⌖ YOUR CITY &nbsp; ✉ NO_REPLY@EXAMPLE.COM &nbsp; ▯ (123)456-7890</p>
-                      </div>
-                      <section className="mb-5">
-                        <h3 className="font-serif text-lg font-semibold uppercase text-slate-700 border-b border-slate-800">Experience</h3>
-                        <div className="mt-2 grid grid-cols-[1fr_auto] gap-x-4 text-sm">
-                          <div><p className="font-semibold">Job Title</p><p>Company Name</p></div>
-                          <p className="font-serif text-xs font-semibold uppercase">MONTH 20XX - PRESENT, Location</p>
-                        </div>
-                        <ul className="mt-1 list-disc pl-4 text-sm leading-6 text-slate-600">
-                          <li>Lorem ipsum dolor sit amet, consectetur adipiscing elit.</li>
-                          <li>Aenean ac interdum nisi.</li>
-                          <li>Sed in consequat mi.</li>
-                          <li>Sed pulvinar lacinia felis eu finibus.</li>
-                        </ul>
-                      </section>
-                      <section className="mb-5"><h3 className="font-serif text-lg font-semibold uppercase text-slate-700 border-b border-slate-800">Education</h3><p className="mt-2 font-semibold">Degree</p><p className="text-sm text-slate-600">College Name · Location · MONTH 20XX-MONTH 20XX</p></section>
-                      <section><h3 className="font-serif text-lg font-semibold uppercase text-slate-700 border-b border-slate-800">Skills</h3><p className="mt-2 text-sm text-slate-600">{activeResume?.headline || 'Upload a resume and Gemini will save it as chat context here.'}</p></section>
+                  <ResumeDocument resume={activeResume} />
+                  {activeResume?.preview_url && (
+                    <div className="mx-auto mt-4 max-w-[850px] rounded-lg border border-slate-200 bg-white p-3 text-xs text-slate-500 shadow-sm">
+                      Original PDF saved for reference. The preview above is rendered from structured JSON so AI edits can update live.
                     </div>
                   )}
                 </div>
