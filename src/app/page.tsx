@@ -213,18 +213,41 @@ export default function Home() {
           </div>
         </div>
         {!activeResume ? (
-          <section className="flex min-h-0 flex-1 items-center justify-center overflow-hidden">
-            <div className="w-full max-w-3xl">
-              <h1 className="mb-5 text-center text-xl font-bold">How can AI Resume Agent help with your resume and job search?</h1>
-              <div className="mb-8 flex justify-center gap-3">
-                <button onClick={() => setInput('Improve my resume score.')} className="rounded-md border bg-white px-4 py-2 text-xs font-bold shadow-sm hover:bg-slate-50">IMPROVE MY SCORE</button>
-                <button onClick={() => setInput('Help me target my resume for a role.')} className="rounded-md border bg-white px-4 py-2 text-xs font-bold shadow-sm hover:bg-slate-50">TARGET MY RESUME</button>
-                <button onClick={() => setInput('Add React to my skills.')} className="rounded-md border bg-white px-4 py-2 text-xs font-bold shadow-sm hover:bg-slate-50">ADD SKILL</button>
+          messages.length === 0 ? (
+            <section className="flex min-h-0 flex-1 items-center justify-center overflow-hidden">
+              <div className="w-full max-w-3xl">
+                <h1 className="mb-5 text-center text-xl font-bold">How can AI Resume Agent help with your resume and job search?</h1>
+                <div className="mb-8 flex justify-center gap-3">
+                  <button onClick={() => setInput('Improve my resume score.')} className="rounded-md border bg-white px-4 py-2 text-xs font-bold shadow-sm hover:bg-slate-50">IMPROVE MY SCORE</button>
+                  <button onClick={() => setInput('Help me target my resume for a role.')} className="rounded-md border bg-white px-4 py-2 text-xs font-bold shadow-sm hover:bg-slate-50">TARGET MY RESUME</button>
+                  <button onClick={() => setInput('Add React to my skills.')} className="rounded-md border bg-white px-4 py-2 text-xs font-bold shadow-sm hover:bg-slate-50">ADD SKILL</button>
+                </div>
+                {composer}
+                {uploading && <p className="mt-3 text-center text-xs text-slate-500">Parsing and saving resume context with Gemini...</p>}
               </div>
-              {composer}
-              {uploading && <p className="mt-3 text-center text-xs text-slate-500">Parsing and saving resume context with Gemini...</p>}
-            </div>
-          </section>
+            </section>
+          ) : (
+            <section className="flex min-h-0 flex-1 flex-col overflow-hidden bg-white rounded-xl border border-slate-200 shadow-sm w-full max-w-5xl mx-auto my-4">
+              <div className="flex h-14 shrink-0 items-center justify-between border-b border-slate-200 px-5">
+                <b className="text-sm">AI Chat</b>
+              </div>
+              <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-5 overscroll-contain">
+                {messages.map((m, i) => (
+                  <div key={i} className={m.role === 'user' ? 'rounded-xl bg-slate-100 p-3 max-w-3xl mx-auto' : 'leading-7 max-w-3xl mx-auto'}>
+                    <div className="whitespace-pre-wrap break-words">{m.content}</div>
+                  </div>
+                ))}
+                {busy && <div className="text-sm text-slate-500 max-w-3xl mx-auto">Working...</div>}
+                <div ref={bottomRef} />
+              </div>
+              <div className="shrink-0 border-t border-slate-200 p-5">
+                <div className="max-w-3xl mx-auto">
+                  {uploading && <p className="mb-2 text-xs text-slate-500">Parsing with Gemini...</p>}
+                  {composer}
+                </div>
+              </div>
+            </section>
+          )
         ) : (
           <section className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_430px] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
             <div className="flex min-h-0 min-w-0 flex-col overflow-hidden border-r border-slate-200">
