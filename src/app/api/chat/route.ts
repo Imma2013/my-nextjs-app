@@ -71,9 +71,28 @@ const RESUME_EDITING_TOOLS = [
 
 export async function POST(req: NextRequest) {
   try {
-    const { messages, resume_id } = await req.json();
+    const { messages, resume_id, userId, sessionId } = await req.json();
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) return NextResponse.json({ error: 'API key not configured' }, { status: 500 });
+
+    const supabase = client();
+    let sid = sessionId;
+
+    if (userId) {
+      if (!sid && messages.length > 0) {
+        const firstUserMsg = messages.find((m: any) => m.role === 'user')?.content || 'New Chat';
+        const title = firstUserMsg.length > 48 ? firstUserMsg.slice(0, 48) + '...' : firstUserMsg;
+        const { data: newSession, error: sErr } = await supabase.from('chat_sessions').insert({ user_id: userId, title, resume_id: resume_id || null }).select().single();
+        if (!sErr && newSession) sid = newSession.id;
+      }
+
+      if (sid && messages.length > 0) {
+        const lastMsg = messages[messages.length - 1];
+        if (lastMsg.role === 'user') {
+          await supabase.from('chat_messages').insert({ session_id: sid, user_id: userId, role: 'user', content: lastMsg.content });
+        }
+      }
+    }
 
     const contents = messages.map((m: { role: string; content: string }) => ({
       role: m.role === 'assistant' ? 'model' : 'user',
@@ -127,14 +146,24 @@ export async function POST(req: NextRequest) {
       );
 
       // Return success message
+      const toolReply = `✅ Updated! ${results.map(r => r.message).join(' ')}`;
+      if (userId && sid) {
+        await supabase.from('chat_messages').insert({ session_id: sid, user_id: userId, role: 'assistant', content: toolReply });
+      }
       return NextResponse.json({
-        reply: `✅ Updated! ${results.map(r => r.message).join(' ')}`,
+        reply: toolReply,
+        sessionId: sid,
         tool_calls: functionCalls.map((fc: any) => fc.functionCall.name),
       });
     }
 
     const reply = parts.find((p: any) => p.text)?.text ?? 'Sorry, no response generated.';
-    return NextResponse.json({ reply });
+    
+    if (userId && sid) {
+      await supabase.from('chat_messages').insert({ session_id: sid, user_id: userId, role: 'assistant', content: reply });
+    }
+
+    return NextResponse.json({ reply, sessionId: sid });
   } catch (e: any) {
     console.error(e);
     return NextResponse.json({ error: 'Chat failed: ' + e.message }, { status: 500 });
