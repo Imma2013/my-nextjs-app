@@ -185,16 +185,37 @@ export default function Home() {
     <div className="fixed inset-0 flex overflow-hidden bg-[#f7f8fb] text-slate-900">
       {authModal}
       <input ref={fileRef} type="file" accept=".pdf,.docx" onChange={uploadFile} className="hidden" />
-      <aside className="flex h-full w-20 shrink-0 flex-col items-center gap-5 overflow-hidden bg-[#332071] py-6 text-white relative z-0">
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-fuchsia-500 font-bold">R</div>
-        <button onClick={newChat} className="h-10 w-10 shrink-0 rounded-lg bg-white/15 text-xl hover:bg-white/25">+</button>
-        <button onClick={() => fileRef.current?.click()} className="h-10 w-10 shrink-0 rounded-lg hover:bg-white/10">📄</button>
-        <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-2 pb-2">
-          {userId && sessions.map(s => <button key={s.id} title={s.title} onClick={() => loadChat(s.id)} className="block h-10 w-10 rounded-lg hover:bg-white/10">💬</button>)}
+      <aside className="flex h-full w-64 shrink-0 flex-col gap-5 overflow-hidden bg-[#332071] py-6 px-4 text-white relative z-0">
+        <div className="flex items-center gap-3 px-2">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-fuchsia-500 font-bold">R</div>
+          <span className="font-bold text-lg">Resume AI</span>
+        </div>
+        <div className="flex flex-col gap-2">
+          <button onClick={newChat} className="flex items-center gap-3 rounded-lg bg-white/15 p-3 text-sm font-bold hover:bg-white/25"><span>+</span> New Chat</button>
+          <button onClick={() => fileRef.current?.click()} className="flex items-center gap-3 rounded-lg p-3 text-sm hover:bg-white/10"><span>📄</span> Upload PDF</button>
+        </div>
+        <div className="min-h-0 flex-1 flex flex-col overflow-hidden">
+          <div className="text-xs font-bold text-white/50 px-2 mb-2">CHAT HISTORY</div>
+          <div className="min-h-0 flex-1 space-y-1 overflow-y-auto pb-2 custom-scrollbar">
+            {userId && sessions.map(s => (
+              <button key={s.id} title={s.title} onClick={() => loadChat(s.id)} className={`flex w-full items-center gap-3 rounded-lg p-3 text-sm text-left hover:bg-white/10 ${activeSessionId === s.id ? 'bg-white/20 font-bold' : ''}`}>
+                <span>💬</span>
+                <span className="truncate">{s.title}</span>
+              </button>
+            ))}
+            {userId && sessions.length === 0 && (
+              <div className="text-sm text-white/50 px-2 italic">No past chats</div>
+            )}
+            {!userId && (
+              <div className="text-sm text-white/50 px-2 italic">Sign in to view history</div>
+            )}
+          </div>
         </div>
         {userId && (
-          <div className="mt-auto pt-4">
-            <button onClick={() => signOut(auth)} className="h-10 w-10 shrink-0 rounded-lg hover:bg-red-500/20 text-xs" title="Sign Out">🚪</button>
+          <div className="mt-auto pt-4 border-t border-white/10">
+            <button onClick={() => signOut(auth)} className="flex w-full items-center gap-3 rounded-lg hover:bg-red-500/20 p-3 text-sm font-bold" title="Sign Out">
+              <span>🚪</span> Sign Out
+            </button>
           </div>
         )}
       </aside>
