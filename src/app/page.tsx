@@ -30,6 +30,8 @@ export default function Home() {
   const [authError, setAuthError] = useState('');
   const [isLogin, setIsLogin] = useState(true);
   const [showAuthModal, setShowAuthModal] = useState(false);
+  const [showDashboard, setShowDashboard] = useState(false);
+  const [resumesList, setResumesList] = useState<any[]>([]);
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
   useEffect(() => { 
@@ -43,7 +45,7 @@ export default function Home() {
     }); 
     return () => unsubscribe(); 
   }, []);
-  useEffect(() => { if (userId) loadSessions(userId); }, [userId]);
+  useEffect(() => { if (userId) { loadSessions(userId); loadResumes(userId); } }, [userId]);
   useEffect(() => { 
     if (!activeResume?.id) return; 
     const c = supabase.channel(`resume-${activeResume.id}`).on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'resumes', filter: `id=eq.${activeResume.id}` }, payload => setActiveResume(prev => prev?.id === payload.new.id ? { ...prev, ...payload.new } as ResumeContext : prev)).subscribe(); 
@@ -51,8 +53,18 @@ export default function Home() {
   }, [activeResume?.id]);
 
   async function loadSessions(uid = userId) { if (!uid) return; const res = await fetch(`/api/chat/sessions?userId=${encodeURIComponent(uid)}`); const data = await res.json(); if (res.ok) setSessions(data.sessions || []); }
-  async function loadChat(id: string) { const res = await fetch(`/api/chat/sessions/${id}?userId=${encodeURIComponent(userId)}`); const data = await res.json(); if (res.ok) { setActiveSessionId(id); setActiveResume(data.session?.resumes || null); setMessages(data.messages || []); } }
-  function newChat() { setActiveSessionId(null); setActiveResume(null); setMessages([]); setInput(''); }
+  async function loadResumes(uid = userId) { if (!uid) return; const res = await fetch(`/api/resumes?userId=${encodeURIComponent(uid)}`); const data = await res.json(); if (res.ok) setResumesList(data.resumes || []); }
+  async function deleteResume(id: string) {
+    if (!userId) return;
+    if (!confirm('Are you sure you want to delete this resume?')) return;
+    const res = await fetch(`/api/resumes?userId=${encodeURIComponent(userId)}&resumeId=${encodeURIComponent(id)}`, { method: 'DELETE' });
+    if (res.ok) {
+      if (activeResume?.id === id) setActiveResume(null);
+      loadResumes(userId);
+    }
+  }
+  async function loadChat(id: string) { const res = await fetch(`/api/chat/sessions/${id}?userId=${encodeURIComponent(userId)}`); const data = await res.json(); if (res.ok) { setActiveSessionId(id); setActiveResume(data.session?.resumes || null); setMessages(data.messages || []); setShowDashboard(false); } }
+  function newChat() { setActiveSessionId(null); setActiveResume(null); setMessages([]); setInput(''); setShowDashboard(false); }
   
   async function uploadFile(e: React.ChangeEvent<HTMLInputElement>) { 
     const file = e.target.files?.[0]; 
@@ -192,7 +204,7 @@ export default function Home() {
         </div>
         <div className="flex flex-col gap-2">
           <button onClick={newChat} className="flex items-center gap-3 rounded-lg bg-white/15 p-3 text-sm font-bold hover:bg-white/25"><span>+</span> New Chat</button>
-          <button onClick={() => fileRef.current?.click()} className="flex items-center gap-3 rounded-lg p-3 text-sm hover:bg-white/10"><span>📄</span> Upload PDF</button>
+          <button onClick={() => { if (!userId) { setShowAuthModal(true); return; } setShowDashboard(true); setActiveResume(null); loadResumes(); }} className={`flex items-center gap-3 rounded-lg p-3 text-sm hover:bg-white/10 ${showDashboard ? 'bg-white/20 font-bold' : ''}`}><span>📄</span> Resumes / CVs</button>
         </div>
         <div className="min-h-0 flex-1 flex flex-col overflow-hidden">
           <div className="text-xs font-bold text-white/50 px-2 mb-2">CHAT HISTORY</div>
@@ -234,7 +246,32 @@ export default function Home() {
           </div>
         </div>
         {!activeResume ? (
-          messages.length === 0 ? (
+          showDashboard ? (
+            <section className="flex min-h-0 flex-1 flex-col overflow-hidden bg-white rounded-xl border border-slate-200 shadow-sm w-full max-w-5xl mx-auto my-4 p-8">
+              <div className="flex items-center justify-between mb-8">
+                <h2 className="text-2xl font-bold text-slate-900">My Resumes / CVs</h2>
+                <button onClick={() => fileRef.current?.click()} disabled={uploading} className="rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm hover:bg-blue-700 disabled:opacity-50">+ Upload New PDF/DOCX</button>
+              </div>
+              {uploading && <p className="mb-4 text-sm text-slate-500">Uploading and parsing with Gemini...</p>}
+              <div className="grid grid-cols-1 gap-4 overflow-y-auto pb-4">
+                {resumesList.length === 0 && !uploading && (
+                  <div className="text-center p-12 border-2 border-dashed border-slate-200 rounded-xl text-slate-500">No resumes uploaded yet. Click the button above to upload one!</div>
+                )}
+                {resumesList.map(r => (
+                  <div key={r.id} className="flex items-center justify-between p-4 border border-slate-200 rounded-xl hover:bg-slate-50">
+                    <div>
+                      <h3 className="font-bold text-slate-900">{r.title || r.file_name}</h3>
+                      <p className="text-xs text-slate-500">Uploaded on {new Date(r.created_at).toLocaleDateString()}</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => { setActiveResume(r); setShowDashboard(false); setMessages([{ role: 'assistant', content: 'Resume loaded. Ask me to edit it, or click directly in the preview to edit manually.' }]); }} className="rounded-md bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-200">Select for Chat</button>
+                      <button onClick={() => deleteResume(r.id)} className="rounded-md bg-red-50 text-red-600 px-3 py-1.5 text-xs font-bold hover:bg-red-100">Delete</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : messages.length === 0 ? (
             <section className="flex min-h-0 flex-1 items-center justify-center overflow-hidden">
               <div className="w-full max-w-3xl">
                 <h1 className="mb-5 text-center text-xl font-bold">How can AI Resume Agent help with your resume and job search?</h1>

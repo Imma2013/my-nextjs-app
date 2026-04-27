@@ -30,6 +30,52 @@ async function createSignedUrl(baseUrl: string, key: string, path: string) {
   return signedURL ? `${baseUrl}/storage/v1${signedURL}` : '';
 }
 
+export async function GET(req: NextRequest) {
+  try {
+    const userId = req.nextUrl.searchParams.get('userId');
+    if (!userId) return NextResponse.json({ error: 'Missing userId' }, { status: 400 });
+
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!supabaseUrl || !serviceKey) return NextResponse.json({ error: 'Supabase is not configured' }, { status: 500 });
+
+    const res = await fetch(`${supabaseUrl}/rest/v1/resumes?user_id=eq.${encodeURIComponent(userId)}&order=created_at.desc`, {
+      method: 'GET',
+      headers: restHeaders(serviceKey),
+    });
+
+    if (!res.ok) throw new Error(await res.text());
+    const resumes = await res.json();
+    return NextResponse.json({ resumes });
+  } catch (e) {
+    console.error(e);
+    return NextResponse.json({ error: 'Failed to fetch resumes' }, { status: 500 });
+  }
+}
+
+export async function DELETE(req: NextRequest) {
+  try {
+    const resumeId = req.nextUrl.searchParams.get('resumeId');
+    const userId = req.nextUrl.searchParams.get('userId');
+    if (!resumeId || !userId) return NextResponse.json({ error: 'Missing resumeId or userId' }, { status: 400 });
+
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!supabaseUrl || !serviceKey) return NextResponse.json({ error: 'Supabase is not configured' }, { status: 500 });
+
+    const res = await fetch(`${supabaseUrl}/rest/v1/resumes?id=eq.${encodeURIComponent(resumeId)}&user_id=eq.${encodeURIComponent(userId)}`, {
+      method: 'DELETE',
+      headers: restHeaders(serviceKey),
+    });
+
+    if (!res.ok) throw new Error(await res.text());
+    return NextResponse.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    return NextResponse.json({ error: 'Failed to delete resume' }, { status: 500 });
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
     const formData = await req.formData();
