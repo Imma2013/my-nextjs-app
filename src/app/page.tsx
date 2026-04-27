@@ -208,7 +208,7 @@ export default function Home() {
             {!userId ? (
               <button onClick={() => setShowAuthModal(true)} className="rounded-md bg-blue-600 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-blue-700">SIGN IN</button>
             ) : (
-              <div className="rounded-md bg-slate-200 px-4 py-2 text-xs font-bold text-slate-600">SIGNED IN</div>
+              <button onClick={() => signOut(auth)} className="rounded-md bg-slate-200 px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-300">SIGN OUT</button>
             )}
           </div>
         </div>
