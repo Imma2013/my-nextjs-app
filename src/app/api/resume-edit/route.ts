@@ -109,7 +109,7 @@ function applyOp(parsedInput: any, op: EditOp) {
 async function geminiOps(message: string, parsed: any): Promise<{ operations: EditOp[]; reply?: string }> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return { operations: [] };
-  const prompt = `Convert this resume edit request into JSON operations only. Do not return markdown or a full resume. Paths must use experience.0.role, experience.0.company, experience.0.location, experience.0.dates, experience.0.bullets.0, skills, education.0.degree. For 'make skills say X' or 'set skills to X', return operation replace, path skills, value [X]. For 'add skill X', return operation add, path skills, value X. Return JSON with operations and reply. Current resume JSON: ${JSON.stringify(parsed).slice(0, 9000)} Request: ${message}`;
+  const prompt = `Convert this resume edit request into JSON operations only. Do not return markdown or a full resume. Paths must use experience.0.role, experience.0.company, experience.0.location, experience.0.dates, experience.0.bullets.0, skills, education.0.degree. For 'make skills say X' or 'set skills to X', return operation replace, path skills, value [X]. For 'add skill X', return operation add, path skills, value X. Return a JSON object with 'operations' array and a short, conversational 'reply' string confirming the specific change (DO NOT put any JSON or full resume text in the reply field, just a short human-readable confirmation). Current resume JSON: ${JSON.stringify(parsed).slice(0, 9000)} Request: ${message}`;
   const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

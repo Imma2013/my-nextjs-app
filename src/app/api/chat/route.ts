@@ -1,6 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
 
 const GEMINI_MODEL = 'gemini-3-flash-preview';
+
+function client() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!url || !key) throw new Error('Database is not configured');
+  return createClient(url, key);
+}
 
 const RESUME_EDITING_TOOLS = [
   {
@@ -72,10 +80,20 @@ export async function POST(req: NextRequest) {
       parts: [{ text: m.content }],
     }));
 
-    let systemPrompt = 'You are an expert resume coach and career advisor. Help users improve their resumes, prepare for interviews, and advance their careers. Be concise, practical, and encouraging.';
+    let systemPrompt = 'You are an expert resume coach and career advisor. Help users improve their resumes, prepare for interviews, and advance their careers. Be concise, practical, and encouraging. NEVER print or output raw JSON, HTML, or full resume text in your response; always speak conversationally.';
     
     if (resume_id) {
-      systemPrompt += `\n\nThe user has an active resume (ID: ${resume_id}). You have tools to edit it. When the user asks you to make changes (e.g., "change my job title to X", "add a bullet about Y"), use the editing tools to update the resume in real-time.`;
+      try {
+        const supabase = client();
+        const { data: resume } = await supabase.from('resumes').select('parsed_json').eq('id', resume_id).single();
+        if (resume?.parsed_json) {
+          systemPrompt += `\n\nHere is the user's current resume in JSON format:\n${JSON.stringify(resume.parsed_json)}`;
+        }
+      } catch (err) {
+        console.error('Failed to load active resume context:', err);
+      }
+      
+      systemPrompt += `\n\nThe user has an active resume (ID: ${resume_id}). You have tools to edit it. When the user asks you to make changes (e.g., "change my job title to X", "add a bullet about Y"), use the editing tools to update the resume in real-time. Do not paste the full resume content back to the user. Respond with a short confirmation message only.`;
     }
 
     const response = await fetch(

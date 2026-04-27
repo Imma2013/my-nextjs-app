@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { supabase } from '@/lib/supabase';
+import { auth, signInAnonymously, onAuthStateChanged } from '@/lib/firebase';
 import ResumeDocument from '@/components/ResumeDocument';
 
 type Message = { role: 'user' | 'assistant'; content: string };
@@ -13,7 +14,7 @@ const EDIT_RE = /\b(edit|change|update|replace|rename|set|make|rewrite|add|remov
 export default function Home() {
   const [messages, setMessages] = useState<Message[]>([]); const [sessions, setSessions] = useState<ChatSession[]>([]); const [activeSessionId, setActiveSessionId] = useState<string | null>(null); const [activeResume, setActiveResume] = useState<ResumeContext | null>(null); const [userId, setUserId] = useState(''); const [input, setInput] = useState(''); const [busy, setBusy] = useState(false); const [uploading, setUploading] = useState(false); const fileRef = useRef<HTMLInputElement>(null); const bottomRef = useRef<HTMLDivElement>(null);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
-  useEffect(() => { let live = true; async function init() { const s = await supabase.auth.getSession(); let session = s.data.session; if (!session) { const res = await supabase.auth.signInAnonymously(); if (res.error) { console.error(res.error); return; } session = res.data.session; } if (live && session?.user?.id) setUserId(session.user.id); } init(); const { data } = supabase.auth.onAuthStateChange((_e, session) => { if (session?.user?.id) setUserId(session.user.id); }); return () => { live = false; data.subscription.unsubscribe(); }; }, []);
+  useEffect(() => { const unsubscribe = onAuthStateChanged(auth, async (user) => { if (user) { setUserId(user.uid); } else { try { const cred = await signInAnonymously(auth); setUserId(cred.user.uid); } catch (err) { console.error("Firebase auth error:", err); } } }); return () => unsubscribe(); }, []);
   useEffect(() => { if (userId) loadSessions(userId); }, [userId]);
   useEffect(() => { if (!activeResume?.id) return; const c = supabase.channel(`resume-${activeResume.id}`).on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'resumes', filter: `id=eq.${activeResume.id}` }, payload => setActiveResume(prev => prev?.id === payload.new.id ? { ...prev, ...payload.new } as ResumeContext : prev)).subscribe(); return () => { supabase.removeChannel(c); }; }, [activeResume?.id]);
   async function loadSessions(uid = userId) { if (!uid) return; const res = await fetch(`/api/chat/sessions?userId=${encodeURIComponent(uid)}`); const data = await res.json(); if (res.ok) setSessions(data.sessions || []); }
