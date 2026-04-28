@@ -42,6 +42,7 @@ function valueFromMessage(message: string, fallback = 'Title') {
 }
 
 function deterministicOps(message: string): EditOp[] {
+  if (message.length > 200) return [];
   const lower = message.toLowerCase();
   const value = valueFromMessage(message);
   if (/job title|\btitle\b|\brole\b|position/.test(lower)) return [{ operation: 'replace', path: 'experience.0.role', value }];
@@ -69,7 +70,10 @@ function applyOp(parsedInput: any, op: EditOp) {
   }
 
   if (sections.has(parts[0]) && parts.length === 1) {
-    if (op.operation === 'add') target.push(op.value);
+    if (op.operation === 'add') {
+      if (parts[0] === 'experience') target.unshift(op.value);
+      else target.push(op.value);
+    }
     else if (op.operation === 'remove') parsed.sections[parts[0]] = [];
     else parsed.sections[parts[0]] = Array.isArray(op.value) ? op.value : [op.value];
     return parsed;
@@ -94,7 +98,8 @@ function applyOp(parsedInput: any, op: EditOp) {
     if (Array.isArray(target) && Number.isInteger(lastIndex) && String(lastIndex) === last) target.splice(lastIndex, 1);
     else delete target[last];
   } else if (op.operation === 'add' && Array.isArray(target[last])) {
-    target[last].push(op.value);
+    if (last === 'experience') target[last].unshift(op.value);
+    else target[last].push(op.value);
   } else if (Array.isArray(target) && Number.isInteger(lastIndex) && String(lastIndex) === last) {
     target[lastIndex] = op.value;
   } else {
@@ -109,7 +114,7 @@ function applyOp(parsedInput: any, op: EditOp) {
 async function geminiOps(message: string, parsed: any): Promise<{ operations: EditOp[]; reply?: string }> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return { operations: [] };
-  const prompt = `Convert this resume edit request into JSON operations only. Do not return markdown or a full resume. Paths must use experience.0.role, experience.0.company, experience.0.location, experience.0.dates, experience.0.bullets.0, skills, education.0.degree. For 'make skills say X' or 'set skills to X', return operation replace, path skills, value [X]. For 'add skill X', return operation add, path skills, value X. Return a JSON object with 'operations' array and a short, conversational 'reply' string confirming the specific change (DO NOT put any JSON or full resume text in the reply field, just a short human-readable confirmation). Current resume JSON: ${JSON.stringify(parsed).slice(0, 9000)} Request: ${message}`;
+  const prompt = `Convert this resume edit request into JSON operations only. Do not return markdown or a full resume. Paths must use experience.0.role, experience.0.company, experience.0.location, experience.0.dates, experience.0.bullets.0, skills, education.0.degree. For 'make skills say X' or 'set skills to X', return operation replace, path skills, value [X]. For 'add skill X', return operation add, path skills, value X. If the user pastes a full job description, experience block, or a chunk of text to add as a job, return an operation with operation: 'add', path: 'experience', and a value object containing exactly these fields: { role, company, location, dates, bullets: [...] }. Ensure bullets is an array of strings. Return a JSON object with 'operations' array and a short, conversational 'reply' string confirming the specific change (DO NOT put any JSON or full resume text in the reply field, just a short human-readable confirmation). Current resume JSON: ${JSON.stringify(parsed).slice(0, 9000)} Request: ${message}`;
   const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
