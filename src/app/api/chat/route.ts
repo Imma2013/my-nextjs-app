@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { generateText } from 'ai';
-import { google } from '@ai-sdk/google';
+import { createGoogleGenerativeAI, google } from '@ai-sdk/google';
 import { z } from 'zod';
 import { Composio } from '@composio/core';
 import { VercelProvider } from '@composio/vercel';
@@ -83,8 +83,10 @@ export async function POST(req: NextRequest) {
     const combinedTools = { ...composioTools, ...customTools } as any;
 
     // Use AI SDK
+    const googleProvider = createGoogleGenerativeAI({ apiKey });
+    
     const result = await generateText({
-      model: google('gemini-3-flash-preview'),
+      model: googleProvider('gemini-3-flash-preview'),
       system: systemPrompt,
       messages: messages.map((m: any) => ({ role: m.role, content: m.content })),
       tools: combinedTools,
