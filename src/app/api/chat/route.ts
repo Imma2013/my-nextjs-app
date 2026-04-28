@@ -84,7 +84,7 @@ export async function POST(req: NextRequest) {
 
     // Use AI SDK
     const result = await generateText({
-      model: google('gemini-1.5-pro-latest'),
+      model: google('gemini-3-flash-preview'),
       system: systemPrompt,
       messages: messages.map((m: any) => ({ role: m.role, content: m.content })),
       tools: combinedTools,
