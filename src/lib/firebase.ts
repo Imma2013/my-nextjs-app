@@ -10,8 +10,16 @@ const firebaseConfig = {
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
 };
 
-const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const googleProvider = new GoogleAuthProvider();
+let app;
+let auth: any = {};
+let googleProvider: any = {};
+
+try {
+  app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+  auth = getAuth(app);
+  googleProvider = new GoogleAuthProvider();
+} catch (e) {
+  console.warn('Firebase initialization failed (this is expected during build without env vars):', e);
+}
 
 export { app, auth, signInAnonymously, onAuthStateChanged, googleProvider };

@@ -65,7 +65,7 @@ export default function JobSearch() {
 
         {!isLoading && results.length === 0 && !error && query && (
           <div className="text-center py-12 text-slate-500">
-            No jobs found for "{query}". Try a different search.
+            No jobs found for &quot;{query}&quot;. Try a different search.
           </div>
         )}
 
