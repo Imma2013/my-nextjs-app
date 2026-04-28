@@ -9,7 +9,12 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@ai-sdk/google": "^3.0.64",
+    "@ai-sdk/react": "^3.0.170",
+    "@composio/core": "^0.8.0",
+    "@composio/vercel": "^0.8.0",
     "@supabase/supabase-js": "^2.45.0",
+    "ai": "^6.0.168",
     "firebase": "^12.12.1",
     "firebase-admin": "^13.8.0",
     "mammoth": "^1.8.0",
@@ -17,7 +22,8 @@
     "pdf.js-extract": "^0.2.1",
     "react": "^18",
     "react-dom": "^18",
-    "react-firebaseui": "^6.0.0"
+    "react-firebaseui": "^6.0.0",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/node": "^20",
