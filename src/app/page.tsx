@@ -33,6 +33,7 @@ export default function Home() {
   const [isLogin, setIsLogin] = useState(true);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showDashboard, setShowDashboard] = useState(false);
+  const [showJobSearch, setShowJobSearch] = useState(false);
   const [resumesList, setResumesList] = useState<any[]>([]);
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
@@ -65,8 +66,8 @@ export default function Home() {
       loadResumes(userId);
     }
   }
-  async function loadChat(id: string) { const res = await fetch(`/api/chat/sessions/${id}?userId=${encodeURIComponent(userId)}`); const data = await res.json(); if (res.ok) { setActiveSessionId(id); setActiveResume(data.session?.resumes || null); setMessages(data.messages || []); setShowDashboard(false); } }
-  function newChat() { setActiveSessionId(null); setActiveResume(null); setMessages([]); setInput(''); setShowDashboard(false); }
+  async function loadChat(id: string) { const res = await fetch(`/api/chat/sessions/${id}?userId=${encodeURIComponent(userId)}`); const data = await res.json(); if (res.ok) { setActiveSessionId(id); setActiveResume(data.session?.resumes || null); setMessages(data.messages || []); setShowDashboard(false); setShowJobSearch(false); } }
+  function newChat() { setActiveSessionId(null); setActiveResume(null); setMessages([]); setInput(''); setShowDashboard(false); setShowJobSearch(false); }
   
   async function uploadFile(e: React.ChangeEvent<HTMLInputElement>) { 
     const file = e.target.files?.[0]; 
@@ -205,8 +206,9 @@ export default function Home() {
           <span className="font-bold text-lg">Resume AI</span>
         </div>
         <div className="flex flex-col gap-2">
+          <button onClick={() => { setActiveResume(null); setShowDashboard(false); setShowJobSearch(true); }} className={`flex items-center gap-3 rounded-lg p-3 text-sm hover:bg-white/10 ${showJobSearch ? 'bg-white/20 font-bold' : ''}`}><span>🔍</span> Job Search</button>
           <button onClick={newChat} className="flex items-center gap-3 rounded-lg bg-white/15 p-3 text-sm font-bold hover:bg-white/25"><span>+</span> New Chat</button>
-          <button onClick={() => { if (!userId) { setShowAuthModal(true); return; } setShowDashboard(true); setActiveResume(null); loadResumes(); }} className={`flex items-center gap-3 rounded-lg p-3 text-sm hover:bg-white/10 ${showDashboard ? 'bg-white/20 font-bold' : ''}`}><span>📄</span> Resumes / CVs</button>
+          <button onClick={() => { if (!userId) { setShowAuthModal(true); return; } setShowDashboard(true); setShowJobSearch(false); setActiveResume(null); loadResumes(); }} className={`flex items-center gap-3 rounded-lg p-3 text-sm hover:bg-white/10 ${showDashboard ? 'bg-white/20 font-bold' : ''}`}><span>📄</span> Resumes / CVs</button>
         </div>
         <div className="min-h-0 flex-1 flex flex-col overflow-hidden">
           <div className="text-xs font-bold text-white/50 px-2 mb-2">CHAT HISTORY</div>
@@ -248,7 +250,11 @@ export default function Home() {
           </div>
         </div>
         {!activeResume ? (
-          showDashboard ? (
+          showJobSearch ? (
+            <section className="flex min-h-0 flex-1 flex-col overflow-hidden bg-white rounded-xl border border-slate-200 shadow-sm w-full max-w-5xl mx-auto my-4 p-0">
+              <JobSearch />
+            </section>
+          ) : showDashboard ? (
             <section className="flex min-h-0 flex-1 flex-col overflow-hidden bg-white rounded-xl border border-slate-200 shadow-sm w-full max-w-5xl mx-auto my-4 p-8">
               <div className="flex items-center justify-between mb-8">
                 <h2 className="text-2xl font-bold text-slate-900">My Resumes / CVs</h2>
@@ -266,7 +272,7 @@ export default function Home() {
                       <p className="text-xs text-slate-500">Uploaded on {new Date(r.created_at).toLocaleDateString()}</p>
                     </div>
                     <div className="flex items-center gap-2">
-                      <button onClick={() => { setActiveResume(r); setShowDashboard(false); setMessages([{ role: 'assistant', content: 'Resume loaded. Ask me to edit it, or click directly in the preview to edit manually.' }]); }} className="rounded-md bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-200">Select for Chat</button>
+                      <button onClick={() => { setActiveResume(r); setShowDashboard(false); setShowJobSearch(false); setMessages([{ role: 'assistant', content: 'Resume loaded. Ask me to edit it, or click directly in the preview to edit manually.' }]); }} className="rounded-md bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-200">Select for Chat</button>
                       <button onClick={() => deleteResume(r.id)} className="rounded-md bg-red-50 text-red-600 px-3 py-1.5 text-xs font-bold hover:bg-red-100">Delete</button>
                     </div>
                   </div>
