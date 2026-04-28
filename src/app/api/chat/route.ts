@@ -12,61 +12,17 @@ function client() {
 
 const RESUME_EDITING_TOOLS = [
   {
-    name: 'edit_contact_info',
-    description: 'Update contact information (name, email, phone, location, etc.)',
+    name: 'edit_resume',
+    description: 'Edit, update, or add to any part of the resume. Pass a clear instruction detailing what should be added, changed, or deleted.',
     parameters: {
       type: 'object',
       properties: {
-        resume_id: { type: 'string', description: 'Resume ID' },
-        full_name: { type: 'string' },
-        email: { type: 'string' },
-        phone: { type: 'string' },
-        location: { type: 'string' },
-        linkedin: { type: 'string' },
-        portfolio: { type: 'string' },
+        resume_id: { type: 'string', description: 'The ID of the resume' },
+        instruction: { type: 'string', description: 'A natural language instruction of what to do (e.g. "change job title to Manager", "add this text to the summary", "add a new experience entry with role X and company Y")' },
       },
-      required: ['resume_id'],
+      required: ['resume_id', 'instruction'],
     },
-  },
-  {
-    name: 'edit_summary',
-    description: 'Update the professional summary section',
-    parameters: {
-      type: 'object',
-      properties: {
-        resume_id: { type: 'string', description: 'Resume ID' },
-        content: { type: 'string', description: 'New summary text' },
-      },
-      required: ['resume_id', 'content'],
-    },
-  },
-  {
-    name: 'edit_experience_field',
-    description: 'Edit a single field in an experience entry (title, company, dates, etc.)',
-    parameters: {
-      type: 'object',
-      properties: {
-        resume_id: { type: 'string' },
-        entry_id: { type: 'string', description: 'Experience entry ID' },
-        field: { type: 'string', enum: ['title', 'company', 'location', 'start_date', 'end_date', 'is_current'] },
-        value: { type: 'string', description: 'New value for the field' },
-      },
-      required: ['resume_id', 'entry_id', 'field', 'value'],
-    },
-  },
-  {
-    name: 'add_experience_bullet',
-    description: 'Add a bullet point to an experience entry',
-    parameters: {
-      type: 'object',
-      properties: {
-        resume_id: { type: 'string' },
-        entry_id: { type: 'string', description: 'Experience entry ID' },
-        bullet_text: { type: 'string', description: 'The bullet point text to add' },
-      },
-      required: ['resume_id', 'entry_id', 'bullet_text'],
-    },
-  },
+  }
 ];
 
 export async function POST(req: NextRequest) {
@@ -141,7 +97,7 @@ export async function POST(req: NextRequest) {
       const results = await Promise.all(
         functionCalls.map(async (fc: any) => {
           const { name, args } = fc.functionCall;
-          return await executeTool(name, args);
+          return await executeTool(name, args, userId);
         })
       );
 
@@ -170,43 +126,17 @@ export async function POST(req: NextRequest) {
   }
 }
 
-async function executeTool(name: string, args: any) {
+async function executeTool(name: string, args: any, userId: string) {
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
 
-  if (name === 'edit_contact_info') {
-    const res = await fetch(`${baseUrl}/api/resume/edit-section`, {
+  if (name === 'edit_resume') {
+    const res = await fetch(`${baseUrl}/api/resume-edit`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ resume_id: args.resume_id, section: 'contact', data: args }),
+      body: JSON.stringify({ resumeId: args.resume_id, userId, message: args.instruction }),
     });
-    return { success: res.ok, message: 'Contact info updated' };
-  }
-
-  if (name === 'edit_summary') {
-    const res = await fetch(`${baseUrl}/api/resume/edit-section`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ resume_id: args.resume_id, section: 'summary', data: { content: args.content } }),
-    });
-    return { success: res.ok, message: 'Summary updated' };
-  }
-
-  if (name === 'edit_experience_field') {
-    const res = await fetch(`${baseUrl}/api/resume/edit-entry`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...args, section: 'experience' }),
-    });
-    return { success: res.ok, message: `${args.field} updated` };
-  }
-
-  if (name === 'add_experience_bullet') {
-    const res = await fetch(`${baseUrl}/api/resume/add-bullet`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...args, section: 'experience' }),
-    });
-    return { success: res.ok, message: 'Bullet added' };
+    const data = await res.json();
+    return { success: res.ok, message: data.reply || 'Resume updated successfully' };
   }
 
   return { success: false, message: 'Unknown tool' };
