@@ -9,7 +9,11 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const apiKey = "21e2568f036eaa04c45da2e0c37f37423ddd500b319c193c499659170153b380";
+    const apiKey = process.env.SERPAPI_API_KEY;
+
+    if (!apiKey) {
+      return NextResponse.json({ error: 'SERPAPI_API_KEY is not configured on the server' }, { status: 500 });
+    }
     const url = `https://serpapi.com/search.json?engine=google_jobs&google_domain=google.com&hl=en&gl=us&api_key=${apiKey}&q=${encodeURIComponent(query)}`;
 
     const response = await fetch(url);
