@@ -7,6 +7,7 @@ export default function JobSearch() {
   const [results, setResults] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+  const [expandedJobIndex, setExpandedJobIndex] = useState<number | null>(null);
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -15,6 +16,7 @@ export default function JobSearch() {
     setIsLoading(true);
     setError('');
     setResults([]);
+    setExpandedJobIndex(null);
 
     try {
       const res = await fetch(`/api/jobs?q=${encodeURIComponent(query)}`);
@@ -69,7 +71,11 @@ export default function JobSearch() {
 
         <div className="grid gap-4 max-w-4xl">
           {results.map((job, index) => (
-            <div key={index} className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm hover:shadow-md transition-shadow">
+            <div 
+              key={index} 
+              onClick={() => setExpandedJobIndex(expandedJobIndex === index ? null : index)}
+              className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm hover:shadow-md transition-shadow cursor-pointer"
+            >
               <div className="flex justify-between items-start gap-4">
                 <div>
                   <h3 className="text-lg font-bold text-slate-900">{job.title}</h3>
@@ -102,6 +108,7 @@ export default function JobSearch() {
                       href={opt.link}
                       target="_blank"
                       rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
                       className="inline-flex items-center rounded-lg bg-blue-50 px-4 py-2 text-sm font-bold text-blue-700 hover:bg-blue-100"
                     >
                       Apply on {opt.title}
@@ -112,12 +119,22 @@ export default function JobSearch() {
                     href={job.share_link}
                     target="_blank"
                     rel="noopener noreferrer"
+                    onClick={(e) => e.stopPropagation()}
                     className="inline-flex items-center rounded-lg bg-blue-50 px-4 py-2 text-sm font-bold text-blue-700 hover:bg-blue-100"
                   >
                     View on Google
                   </a>
                 ) : null}
               </div>
+
+              {expandedJobIndex === index && job.description && (
+                <div className="mt-5 border-t border-slate-100 pt-4">
+                  <h4 className="text-sm font-bold text-slate-900 mb-2">Job Description</h4>
+                  <p className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">
+                    {job.description}
+                  </p>
+                </div>
+              )}
             </div>
           ))}
         </div>
