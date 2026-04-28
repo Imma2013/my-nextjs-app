@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabase';
 import { auth, onAuthStateChanged, googleProvider } from '@/lib/firebase';
 import { signInWithPopup, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from 'firebase/auth';
 import ResumeDocument from '@/components/ResumeDocument';
+import JobSearch from '@/components/JobSearch';
 
 type Message = { role: 'user' | 'assistant'; content: string };
 type ResumeContext = { id: string; title?: string; file_name?: string; summary?: string; candidate_name?: string; headline?: string; preview_url?: string; parsed_json?: any };
@@ -17,6 +18,7 @@ export default function Home() {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [activeResume, setActiveResume] = useState<ResumeContext | null>(null);
+  const [activeTab, setActiveTab] = useState<'resume' | 'jobs'>('resume');
   const [userId, setUserId] = useState('');
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
@@ -310,17 +312,25 @@ export default function Home() {
           <section className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_430px] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
             <div className="flex min-h-0 min-w-0 flex-col overflow-hidden border-r border-slate-200">
               <div className="flex h-14 shrink-0 items-center justify-center border-b border-slate-200">
-                <div className="rounded-lg border bg-slate-50 p-1">
-                  <button className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-bold text-white">RESUME</button>
-                  <button onClick={() => sendMessage('Help me tailor this resume to a specific job search.')} className="rounded-md px-3 py-1.5 text-xs font-bold hover:bg-slate-200">JOB SEARCH</button>
+                <div className="rounded-lg border bg-slate-50 p-1 flex gap-1">
+                  <button onClick={() => setActiveTab('resume')} className={`rounded-md px-3 py-1.5 text-xs font-bold ${activeTab === 'resume' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-200'}`}>RESUME</button>
+                  <button onClick={() => setActiveTab('jobs')} className={`rounded-md px-3 py-1.5 text-xs font-bold ${activeTab === 'jobs' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-200'}`}>JOB SEARCH</button>
                 </div>
               </div>
-              <div className="flex h-12 shrink-0 items-center justify-between border-b border-slate-200 px-5">
-                <b>Resume</b><span className="text-xs text-slate-500">Click text to edit manually</span>
-              </div>
-              <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-slate-100 p-7 overscroll-contain">
-                <ResumeDocument resume={activeResume} onEdit={handleManualEdit} />
-              </div>
+              {activeTab === 'resume' ? (
+                <>
+                  <div className="flex h-12 shrink-0 items-center justify-between border-b border-slate-200 px-5">
+                    <b>Resume</b><span className="text-xs text-slate-500">Click text to edit manually</span>
+                  </div>
+                  <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-slate-100 p-7 overscroll-contain">
+                    <ResumeDocument resume={activeResume} onEdit={handleManualEdit} />
+                  </div>
+                </>
+              ) : (
+                <div className="min-h-0 flex-1 overflow-hidden">
+                  <JobSearch />
+                </div>
+              )}
             </div>
             <aside className="flex min-h-0 min-w-0 flex-col overflow-hidden bg-white">
               <div className="flex h-14 shrink-0 items-center gap-2 border-b border-slate-200 px-5">
