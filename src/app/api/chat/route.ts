@@ -92,19 +92,17 @@ export async function POST(req: NextRequest) {
       tools: combinedTools,
     });
 
-    let toolReply = '';
-    if (result.toolResults && result.toolResults.length > 0) {
-      const resultsArray = result.toolResults.map(r => JSON.stringify(r));
-      toolReply = `\n\n[Action Taken: ${resultsArray.join(', ')}]`;
-    }
+    const reply = result.text;
 
-    const reply = result.text + toolReply;
-
-    if (userId && sid) {
+    if (userId && sid && reply) {
       await supabase.from('chat_messages').insert({ session_id: sid, user_id: userId, role: 'assistant', content: reply });
     }
 
-    return NextResponse.json({ reply, sessionId: sid });
+    return NextResponse.json({ 
+      reply, 
+      sessionId: sid,
+      toolResults: result.toolResults 
+    });
   } catch (e: any) {
     console.error(e);
     return NextResponse.json({ error: 'Chat failed: ' + e.message }, { status: 500 });
