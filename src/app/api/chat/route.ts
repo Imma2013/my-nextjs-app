@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-
-const GEMINI_MODEL = 'gemini-3-flash-preview';
+import { generateText } from 'ai';
+import { google } from '@ai-sdk/google';
+import { z } from 'zod';
+import { Composio } from '@composio/core';
+import { VercelProvider } from '@composio/vercel';
 
 function client() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -10,20 +13,7 @@ function client() {
   return createClient(url, key);
 }
 
-const RESUME_EDITING_TOOLS = [
-  {
-    name: 'edit_resume',
-    description: 'Edit, update, or add to any part of the resume. Pass a clear instruction detailing what should be added, changed, or deleted.',
-    parameters: {
-      type: 'object',
-      properties: {
-        resume_id: { type: 'string', description: 'The ID of the resume' },
-        instruction: { type: 'string', description: 'A natural language instruction of what to do (e.g. "change job title to Manager", "add this text to the summary", "add a new experience entry with role X and company Y")' },
-      },
-      required: ['resume_id', 'instruction'],
-    },
-  }
-];
+const composio = new Composio({ provider: new VercelProvider() });
 
 export async function POST(req: NextRequest) {
   try {
@@ -50,16 +40,10 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const contents = messages.map((m: { role: string; content: string }) => ({
-      role: m.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: m.content }],
-    }));
-
-    let systemPrompt = 'You are an expert resume coach and career advisor. Help users improve their resumes, prepare for interviews, and advance their careers. Be concise, practical, and encouraging. NEVER print or output raw JSON, HTML, or full resume text in your response; always speak conversationally.';
+    let systemPrompt = 'You are an expert resume coach and career advisor. You also have access to 1000+ real-world tools via Composio. You can use these tools to help the user directly (e.g. "email my resume to X", "check my GitHub repos", "save a draft to Notion"). Always be helpful, concise, and professional.';
     
     if (resume_id) {
       try {
-        const supabase = client();
         const { data: resume } = await supabase.from('resumes').select('parsed_json').eq('id', resume_id).single();
         if (resume?.parsed_json) {
           systemPrompt += `\n\nHere is the user's current resume in JSON format:\n${JSON.stringify(resume.parsed_json)}`;
@@ -68,53 +52,52 @@ export async function POST(req: NextRequest) {
         console.error('Failed to load active resume context:', err);
       }
       
-      systemPrompt += `\n\nThe user has an active resume (ID: ${resume_id}). You have tools to edit it. When the user asks you to make changes (e.g., "change my job title to X", "add a bullet about Y"), use the editing tools to update the resume in real-time. Do not paste the full resume content back to the user. Respond with a short confirmation message only.`;
+      systemPrompt += `\n\nThe user has an active resume (ID: ${resume_id}). When the user asks you to make changes to their resume, you MUST use the "edit_resume" tool provided. Provide clear instructions to the tool, such as "Change the job title to Manager" or "Add a new experience block for Software Engineer at Tech Corp".`;
     }
 
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          system_instruction: { parts: [{ text: systemPrompt }] },
-          contents,
-          tools: resume_id ? [{ functionDeclarations: RESUME_EDITING_TOOLS }] : undefined,
+    // Set up Composio Session scoped to user (or 'anonymous')
+    const session = await composio.create(userId || "anonymous");
+    const composioTools = await session.tools();
+
+    // Define custom local tools
+    const customTools = {
+      edit_resume: {
+        description: 'Edit, update, or add to any part of the user\'s resume. Pass a clear natural language instruction detailing what should be added, changed, or deleted.',
+        parameters: z.object({
+          resume_id: z.string().describe('The ID of the resume'),
+          instruction: z.string().describe('A natural language instruction of what to do (e.g. "change job title to Manager", "add this text to the summary")'),
         }),
-      }
-    );
+        execute: async (args: { resume_id: string; instruction: string }) => {
+          const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+          const res = await fetch(`${baseUrl}/api/resume-edit`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ resumeId: args.resume_id, userId, message: args.instruction }),
+          });
+          const data = await res.json();
+          return { success: res.ok, reply: data.reply || 'Resume updated successfully' };
+        },
+      },
+    };
 
-    const data = await response.json();
-    if (data.error) throw new Error(data.error.message);
+    const combinedTools = { ...composioTools, ...customTools } as any;
 
-    const candidate = data.candidates?.[0];
-    const parts = candidate?.content?.parts || [];
+    // Use AI SDK
+    const result = await generateText({
+      model: google('gemini-1.5-pro-latest'),
+      system: systemPrompt,
+      messages: messages.map((m: any) => ({ role: m.role, content: m.content })),
+      tools: combinedTools,
+    });
 
-    // Check for function calls
-    const functionCalls = parts.filter((p: any) => p.functionCall);
-    if (functionCalls.length > 0) {
-      // Execute function calls
-      const results = await Promise.all(
-        functionCalls.map(async (fc: any) => {
-          const { name, args } = fc.functionCall;
-          return await executeTool(name, args, userId);
-        })
-      );
-
-      // Return success message
-      const toolReply = `✅ Updated! ${results.map(r => r.message).join(' ')}`;
-      if (userId && sid) {
-        await supabase.from('chat_messages').insert({ session_id: sid, user_id: userId, role: 'assistant', content: toolReply });
-      }
-      return NextResponse.json({
-        reply: toolReply,
-        sessionId: sid,
-        tool_calls: functionCalls.map((fc: any) => fc.functionCall.name),
-      });
+    let toolReply = '';
+    if (result.toolResults && result.toolResults.length > 0) {
+      const resultsArray = result.toolResults.map(r => JSON.stringify(r));
+      toolReply = `\n\n[Action Taken: ${resultsArray.join(', ')}]`;
     }
 
-    const reply = parts.find((p: any) => p.text)?.text ?? 'Sorry, no response generated.';
-    
+    const reply = result.text + toolReply;
+
     if (userId && sid) {
       await supabase.from('chat_messages').insert({ session_id: sid, user_id: userId, role: 'assistant', content: reply });
     }
@@ -124,20 +107,4 @@ export async function POST(req: NextRequest) {
     console.error(e);
     return NextResponse.json({ error: 'Chat failed: ' + e.message }, { status: 500 });
   }
-}
-
-async function executeTool(name: string, args: any, userId: string) {
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
-
-  if (name === 'edit_resume') {
-    const res = await fetch(`${baseUrl}/api/resume-edit`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ resumeId: args.resume_id, userId, message: args.instruction }),
-    });
-    const data = await res.json();
-    return { success: res.ok, message: data.reply || 'Resume updated successfully' };
-  }
-
-  return { success: false, message: 'Unknown tool' };
 }
