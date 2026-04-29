@@ -143,7 +143,9 @@ export function createGeminiFallbackMiddleware(getModel: (model: string) => Lang
     wrapGenerate: async ({ doGenerate, params }) => {
       const attempts: GeminiAttempt[] = [];
 
-      for (const [index, model] of GEMINI_MODEL_FALLBACKS.entries()) {
+      for (let index = 0; index < GEMINI_MODEL_FALLBACKS.length; index += 1) {
+        const model = GEMINI_MODEL_FALLBACKS[index];
+
         try {
           return index === 0 ? await doGenerate() : await getModel(model).doGenerate(params);
         } catch (error) {
@@ -159,7 +161,9 @@ export function createGeminiFallbackMiddleware(getModel: (model: string) => Lang
     wrapStream: async ({ doStream, params }) => {
       const attempts: GeminiAttempt[] = [];
 
-      for (const [index, model] of GEMINI_MODEL_FALLBACKS.entries()) {
+      for (let index = 0; index < GEMINI_MODEL_FALLBACKS.length; index += 1) {
+        const model = GEMINI_MODEL_FALLBACKS[index];
+
         try {
           return index === 0 ? await doStream() : await getModel(model).doStream(params);
         } catch (error) {
