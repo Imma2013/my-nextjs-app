@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
-const GEMINI_MODEL = 'gemini-3-flash-preview';
+const GEMINI_MODEL = 'gemini-2.5-flash';
 type EditOp = { operation?: 'replace' | 'add' | 'remove'; path: string; value?: unknown };
 
 function client() {

@@ -7,7 +7,7 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || 'placeholder';
 const supabase = createClient(supabaseUrl, serviceKey);
 
-const GEMINI_MODEL = 'gemini-3-flash-preview';
+const GEMINI_MODEL = 'gemini-2.5-flash';
 
 export async function POST(req: NextRequest) {
   try {

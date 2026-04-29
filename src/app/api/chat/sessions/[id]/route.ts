@@ -40,10 +40,16 @@ export async function GET(req: NextRequest, { params }: RouteContext) {
     const session = sessions?.[0];
     if (!session) return NextResponse.json({ error: 'Chat session not found' }, { status: 404 });
 
-    const messagesResponse = await supabaseFetch(
-      `chat_messages?session_id=eq.${encodeURIComponent(params.id)}&user_id=eq.${encodeURIComponent(userId)}&select=role,content,created_at&order=created_at.asc`,
+    let messagesResponse = await supabaseFetch(
+      `chat_messages?session_id=eq.${encodeURIComponent(params.id)}&user_id=eq.${encodeURIComponent(userId)}&select=role,content,parts,created_at&order=created_at.asc`,
       { method: 'GET' }
     );
+    if (!messagesResponse.ok) {
+      messagesResponse = await supabaseFetch(
+        `chat_messages?session_id=eq.${encodeURIComponent(params.id)}&user_id=eq.${encodeURIComponent(userId)}&select=role,content,created_at&order=created_at.asc`,
+        { method: 'GET' }
+      );
+    }
     if (!messagesResponse.ok) throw new Error(await messagesResponse.text());
 
     const messages = await messagesResponse.json();

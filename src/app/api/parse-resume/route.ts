@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-const GEMINI_MODEL = 'gemini-3-flash-preview';
+const GEMINI_MODEL = 'gemini-2.5-flash';
 const MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024;
 
 const SUPPORTED_MIME_TYPES = new Set([
