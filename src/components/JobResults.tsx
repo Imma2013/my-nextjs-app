@@ -7,10 +7,12 @@ export function JobResults({
   query,
   jobs,
   onTailorResume,
+  tailorButtonLabel = 'Tailor resume - 1 credit',
 }: {
   query?: string;
   jobs: JobResult[];
   onTailorResume?: (job: JobResult) => void;
+  tailorButtonLabel?: string;
 }) {
   const [expandedJobIndex, setExpandedJobIndex] = useState<number | null>(null);
 
@@ -71,7 +73,7 @@ export function JobResults({
                   onClick={() => onTailorResume(job)}
                   className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-bold text-white hover:bg-slate-800"
                 >
-                  Tailor resume
+                  {tailorButtonLabel}
                 </button>
               )}
 

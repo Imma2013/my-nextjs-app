@@ -15,6 +15,13 @@ type ChatMessage = UIMessage<{ sessionId?: string }>;
 type ResumeContext = { id: string; title?: string; file_name?: string; summary?: string; candidate_name?: string; headline?: string; preview_url?: string; parsed_json?: any };
 type ChatSession = { id: string; title: string; resumes?: ResumeContext | null };
 type EditPayload = { operation: 'replace' | 'add' | 'remove'; path: string; value?: unknown };
+type BillingSummary = {
+  credits: number;
+  plan: string;
+  planStatus: string;
+  currentPeriodEnd?: string | null;
+  freeTailorAvailable: boolean;
+};
 
 function makeTextMessage(role: 'user' | 'assistant', text: string): ChatMessage {
   return {
@@ -71,6 +78,19 @@ function getSearchJobsPayload(output: unknown): JobSearchPayload | null {
   };
 }
 
+function makeIdempotencyKey() {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID();
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function looksLikePaidResumeRequest(text: string) {
+  return /\btailor\b|\btarget\b|\bats\b|\bcover letter\b|\bresume builder\b|\b(optimi[sz]e|rewrite|improve|edit|update)\b.*\bresume\b|\bresume\b.*\b(optimi[sz]e|rewrite|improve|edit|update)\b/i.test(text);
+}
+
+function looksLikeTailorRequest(text: string) {
+  return /\btailor\b|\btarget\b|\bats\b|\bjob description\b/i.test(text);
+}
+
 export default function Home() {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -80,6 +100,7 @@ export default function Home() {
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const resumedCheckoutRef = useRef(false);
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -88,6 +109,9 @@ export default function Home() {
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showDashboard, setShowDashboard] = useState(false);
   const [resumesList, setResumesList] = useState<any[]>([]);
+  const [billing, setBilling] = useState<BillingSummary | null>(null);
+  const [showPaywall, setShowPaywall] = useState(false);
+  const [checkoutBusy, setCheckoutBusy] = useState('');
 
   const {
     messages,
@@ -104,10 +128,16 @@ export default function Home() {
         .filter((part: any) => getPartToolName(part) === 'edit_resume')
         .map(getPartOutput)
         .find((output: any) => output?.resume)?.resume;
+      const paymentRequired = message.parts
+        .filter((part: any) => getPartToolName(part) === 'edit_resume')
+        .map(getPartOutput)
+        .some((output: any) => output?.paymentRequired);
       if (resumeFromTool) setActiveResume(resumeFromTool);
+      if (paymentRequired) setShowPaywall(true);
       if (userId) {
         loadSessions(userId);
         loadResumes(userId);
+        loadBilling(userId);
       }
     },
   });
@@ -125,7 +155,28 @@ export default function Home() {
     });
     return () => unsubscribe();
   }, []);
-  useEffect(() => { if (userId) { loadSessions(userId); loadResumes(userId); } }, [userId]);
+  useEffect(() => { if (userId) { loadSessions(userId); loadResumes(userId); loadBilling(userId); } else { setBilling(null); } }, [userId]);
+  useEffect(() => {
+    if (!userId || !billing || resumedCheckoutRef.current || typeof window === 'undefined') return;
+    if (!window.location.search.includes('checkout=success')) return;
+    const raw = window.localStorage.getItem('pendingTailorResume');
+    if (!raw) return;
+    try {
+      const pending = JSON.parse(raw) as { instruction?: string; resume?: ResumeContext };
+      if (!pending.instruction || !pending.resume || !hasCreditsForResumeAction(pending.instruction)) return;
+      resumedCheckoutRef.current = true;
+      window.localStorage.removeItem('pendingTailorResume');
+      setActiveResume(pending.resume);
+      setShowDashboard(false);
+      setInput('');
+      void sendChatMessage(
+        { text: pending.instruction },
+        { body: { userId, sessionId: activeSessionId, resumeId: pending.resume.id, idempotencyKey: makeIdempotencyKey() } },
+      );
+    } catch {
+      window.localStorage.removeItem('pendingTailorResume');
+    }
+  }, [userId, billing?.credits, billing?.freeTailorAvailable]);
   useEffect(() => {
     if (!activeResume?.id) return;
     const channel = supabase
@@ -149,6 +200,58 @@ export default function Home() {
     const res = await fetch(`/api/resumes?userId=${encodeURIComponent(uid)}`);
     const data = await res.json();
     if (res.ok) setResumesList(data.resumes || []);
+  }
+
+  async function loadBilling(uid = userId) {
+    if (!uid) return;
+    const res = await fetch(`/api/billing/credits?userId=${encodeURIComponent(uid)}`);
+    const data = await res.json();
+    if (res.ok) setBilling(data);
+  }
+
+  function hasCreditsForResumeAction(text: string) {
+    if (!billing) return false;
+    if (looksLikeTailorRequest(text) && billing.freeTailorAvailable) return true;
+    return billing.credits >= 1;
+  }
+
+  async function startCheckout(checkoutType: 'subscription' | 'topup', value: string) {
+    if (!userId) {
+      setShowAuthModal(true);
+      return;
+    }
+    setCheckoutBusy(value);
+    try {
+      const body = checkoutType === 'subscription'
+        ? { userId, checkoutType, plan: value, returnPath: window.location.pathname + window.location.search }
+        : { userId, checkoutType, package: value, returnPath: window.location.pathname + window.location.search };
+      const res = await fetch('/api/billing/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Checkout failed');
+      window.location.href = data.url;
+    } catch (err) {
+      setMessages(prev => [...prev, makeTextMessage('assistant', 'Checkout failed: ' + (err instanceof Error ? err.message : 'Unknown error'))]);
+    } finally {
+      setCheckoutBusy('');
+    }
+  }
+
+  async function openBillingPortal() {
+    if (!userId) {
+      setShowAuthModal(true);
+      return;
+    }
+    const res = await fetch('/api/billing/portal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId, returnPath: window.location.pathname + window.location.search }),
+    });
+    const data = await res.json();
+    if (res.ok) window.location.href = data.url;
   }
 
   async function deleteResume(id: string) {
@@ -226,6 +329,7 @@ export default function Home() {
     if (!res.ok) throw new Error(data.error || 'Resume edit failed');
     if (!data.resume) throw new Error(data.reply || 'Could not map this to a saved resume field');
     setActiveResume(data.resume);
+    if (data.billing) loadBilling(userId);
     return data.reply || 'Updated the resume preview.';
   }
 
@@ -245,12 +349,16 @@ export default function Home() {
       setShowAuthModal(true);
       return;
     }
+    if (activeResume && billing && looksLikePaidResumeRequest(msg) && !hasCreditsForResumeAction(msg)) {
+      setShowPaywall(true);
+      return;
+    }
     setInput('');
     setShowDashboard(false);
     try {
       await sendChatMessage(
         { text: msg },
-        { body: { userId, sessionId: activeSessionId, resumeId: activeResume?.id } },
+        { body: { userId, sessionId: activeSessionId, resumeId: activeResume?.id, idempotencyKey: makeIdempotencyKey() } },
       );
       await loadSessions();
     } catch (err) {
@@ -280,6 +388,14 @@ export default function Home() {
       job.location ? `Location: ${job.location}.` : '',
       job.description ? `Job description:\n${job.description}` : '',
     ].filter(Boolean).join('\n\n');
+
+    if (billing && !hasCreditsForResumeAction(instruction)) {
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem('pendingTailorResume', JSON.stringify({ instruction, resume: activeResume }));
+      }
+      setShowPaywall(true);
+      return;
+    }
 
     sendMessage(instruction);
   }
@@ -323,7 +439,7 @@ export default function Home() {
         if (toolName === 'search_jobs') {
           const payload = getSearchJobsPayload(output);
           if (payload) {
-            return <JobResults key={part.toolCallId || j} query={payload.query} jobs={payload.jobs} onTailorResume={tailorResume} />;
+            return <JobResults key={part.toolCallId || j} query={payload.query} jobs={payload.jobs} onTailorResume={tailorResume} tailorButtonLabel={billing?.freeTailorAvailable ? 'Tailor resume - Free' : 'Tailor resume - 1 credit'} />;
           }
         }
 
@@ -382,8 +498,49 @@ export default function Home() {
     </div>
   );
 
+  const planLabel = billing?.plan === 'pro_plus' ? 'Pro Plus' : billing?.plan === 'pro' ? 'Pro' : 'Free';
+  const paywallModal = showPaywall && (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm">
+      <div className="relative w-full max-w-lg rounded-xl bg-white p-7 shadow-2xl">
+        <button onClick={() => setShowPaywall(false)} className="absolute right-4 top-4 text-slate-400 hover:text-slate-600">x</button>
+        <h2 className="text-xl font-bold text-slate-900">Add credits to continue</h2>
+        <p className="mt-2 text-sm leading-6 text-slate-600">
+          AI resume edits use credits. Job search, uploads, and manual preview edits stay free.
+        </p>
+        <div className="mt-5 grid gap-3">
+          <button onClick={() => startCheckout('subscription', 'pro')} disabled={!!checkoutBusy} className="flex items-center justify-between rounded-lg border border-blue-200 bg-blue-50 p-4 text-left hover:bg-blue-100 disabled:opacity-60">
+            <span><b className="block text-slate-900">Pro</b><span className="text-sm text-slate-600">$19/mo - 30 monthly credits</span></span>
+            <span className="text-sm font-bold text-blue-700">{checkoutBusy === 'pro' ? 'Opening...' : 'Choose'}</span>
+          </button>
+          <button onClick={() => startCheckout('subscription', 'pro_plus')} disabled={!!checkoutBusy} className="flex items-center justify-between rounded-lg border border-slate-200 p-4 text-left hover:bg-slate-50 disabled:opacity-60">
+            <span><b className="block text-slate-900">Pro Plus</b><span className="text-sm text-slate-600">$29/mo - 75 monthly credits</span></span>
+            <span className="text-sm font-bold text-blue-700">{checkoutBusy === 'pro_plus' ? 'Opening...' : 'Choose'}</span>
+          </button>
+        </div>
+        <div className="mt-5 grid grid-cols-3 gap-2">
+          {[
+            ['credits_5', '$5', '5 credits'],
+            ['credits_20', '$15', '20 credits'],
+            ['credits_50', '$29', '50 credits'],
+          ].map(([key, price, label]) => (
+            <button key={key} onClick={() => startCheckout('topup', key)} disabled={!!checkoutBusy} className="rounded-lg border border-slate-200 p-3 text-center hover:bg-slate-50 disabled:opacity-60">
+              <b className="block text-sm text-slate-900">{price}</b>
+              <span className="text-xs text-slate-500">{checkoutBusy === key ? 'Opening...' : label}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+
   const composer = (
     <div className="relative z-10 shrink-0 rounded-xl border-2 border-blue-500 bg-white p-4 shadow-sm">
+      {userId && billing && (
+        <div className="mb-2 flex items-center justify-between text-xs text-slate-500">
+          <span>{billing.credits} credits - {planLabel}</span>
+          <span className="font-semibold text-blue-700">{billing.freeTailorAvailable ? 'Free tailor available' : 'AI resume edits cost 1 credit'}</span>
+        </div>
+      )}
       <textarea
         value={input}
         onChange={e => setInput(e.target.value)}
@@ -403,6 +560,7 @@ export default function Home() {
   return (
     <div className="fixed inset-0 flex overflow-hidden bg-[#f7f8fb] text-slate-900">
       {authModal}
+      {paywallModal}
       <input ref={fileRef} type="file" accept=".pdf,.docx" onChange={uploadFile} className="hidden" />
       <aside className="relative z-0 flex h-full w-64 shrink-0 flex-col gap-5 overflow-hidden bg-[#332071] px-4 py-6 text-white">
         <div className="flex items-center gap-3 px-2">
@@ -440,6 +598,11 @@ export default function Home() {
             {userId && <button onClick={() => loadSessions()} className="rounded-md border border-slate-200 bg-white px-4 py-2 text-xs font-bold shadow-sm">RECENT CHATS</button>}
           </div>
           <div className="flex items-center gap-3">
+            {userId && billing && (
+              <button onClick={openBillingPortal} className="rounded-md border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-700 shadow-sm hover:bg-slate-50">
+                {billing.credits} CREDITS - {planLabel.toUpperCase()}
+              </button>
+            )}
             <button onClick={newChat} className="rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-xs font-bold text-blue-700 hover:bg-blue-100">+ NEW CHAT</button>
             {!userId ? (
               <button onClick={() => setShowAuthModal(true)} className="rounded-md bg-blue-600 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-blue-700">SIGN IN</button>
@@ -453,8 +616,14 @@ export default function Home() {
           showDashboard ? (
             <section className="mx-auto my-4 flex min-h-0 w-full max-w-5xl flex-1 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white p-8 shadow-sm">
               <div className="mb-8 flex items-center justify-between">
-                <h2 className="text-2xl font-bold text-slate-900">My Resumes / CVs</h2>
-                <button onClick={() => fileRef.current?.click()} disabled={uploading} className="rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm hover:bg-blue-700 disabled:opacity-50">+ Upload New PDF/DOCX</button>
+                <div>
+                  <h2 className="text-2xl font-bold text-slate-900">My Resumes / CVs</h2>
+                  {billing && <p className="mt-1 text-sm text-slate-500">{planLabel} plan - {billing.credits} credits available</p>}
+                </div>
+                <div className="flex items-center gap-2">
+                  {billing && <button onClick={() => setShowPaywall(true)} className="rounded-md border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50">Billing</button>}
+                  <button onClick={() => fileRef.current?.click()} disabled={uploading} className="rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm hover:bg-blue-700 disabled:opacity-50">+ Upload New PDF/DOCX</button>
+                </div>
               </div>
               {uploading && <p className="mb-4 text-sm text-slate-500">Uploading and parsing with Gemini...</p>}
               <div className="grid grid-cols-1 gap-4 overflow-y-auto pb-4">

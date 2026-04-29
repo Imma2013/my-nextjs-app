@@ -1,5 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import {
+  assertCanRunPaidAction,
+  creditCostForAction,
+  inferResumeBillingAction,
+  isPaidBillingAction,
+  PaymentRequiredError,
+  recordPaidActionSuccess,
+  type BillingAction,
+} from '@/lib/billing';
 
 const GEMINI_MODEL = 'gemini-2.5-flash';
 type EditOp = { operation?: 'replace' | 'add' | 'remove'; path: string; value?: unknown };
@@ -141,14 +150,29 @@ async function geminiOps(message: string, parsed: any): Promise<{ operations: Ed
 
 export async function POST(req: NextRequest) {
   try {
-    const { resumeId, userId, message, value } = await req.json();
+    const { resumeId, userId, message, value, edit, billingAction, idempotencyKey } = await req.json();
     if (!resumeId || !userId) return NextResponse.json({ error: 'Missing resumeId or userId' }, { status: 400 });
     const supabase = client();
     const loaded = await supabase.from('resumes').select('*').eq('id', resumeId).eq('user_id', userId).single();
     if (loaded.error) throw loaded.error;
 
     let parsed = copy(loaded.data.parsed_json || {});
-    let operations = deterministicOps(String(message || value || ''));
+    const manualEdit = edit && typeof edit === 'object' && typeof edit.path === 'string';
+    const actionType: BillingAction | null = manualEdit
+      ? null
+      : isPaidBillingAction(billingAction)
+        ? billingAction
+        : inferResumeBillingAction(String(message || value || ''));
+    const cost = actionType ? creditCostForAction(actionType) : 0;
+    const chargeKey = String(idempotencyKey || `${userId}:${resumeId}:${Date.now()}:${Math.random().toString(36).slice(2)}`);
+
+    if (actionType) {
+      await assertCanRunPaidAction({ userId, actionType, cost, idempotencyKey: chargeKey });
+    }
+
+    let operations = manualEdit
+      ? [edit as EditOp]
+      : deterministicOps(String(message || value || ''));
     let reply = '';
     if (!operations.length && message) {
       const ai = await geminiOps(String(message), parsed);
@@ -170,10 +194,24 @@ export async function POST(req: NextRequest) {
       .single();
     if (saved.error) throw saved.error;
 
+    let billing = null;
+    if (actionType) {
+      billing = await recordPaidActionSuccess({
+        userId,
+        actionType,
+        cost,
+        idempotencyKey: chargeKey,
+        resumeId,
+      });
+    }
+
     const count = operations.length;
-    return NextResponse.json({ resume: saved.data, reply: reply || `Saved ${count} resume edit${count === 1 ? '' : 's'}. You should see the preview update now.`, operations });
+    return NextResponse.json({ resume: saved.data, reply: reply || `Saved ${count} resume edit${count === 1 ? '' : 's'}. You should see the preview update now.`, operations, billing });
   } catch (e) {
     console.error(e);
+    if (e instanceof PaymentRequiredError) {
+      return NextResponse.json({ error: e.message, paymentRequired: true, ...e.details }, { status: 402 });
+    }
     return NextResponse.json({ error: e instanceof Error ? e.message : 'Failed to edit resume' }, { status: 500 });
   }
 }

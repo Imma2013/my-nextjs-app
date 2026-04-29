@@ -1,15 +1,28 @@
 import { NextRequest, NextResponse } from 'next/server';
+import {
+  assertCanRunPaidAction,
+  creditCostForAction,
+  PaymentRequiredError,
+  recordPaidActionSuccess,
+} from '@/lib/billing';
 
 const GEMINI_MODEL = 'gemini-2.5-flash';
 
 export async function POST(req: NextRequest) {
   try {
-    const { resume, jobDescription, userId } = await req.json();
+    const { resume, jobDescription, userId, idempotencyKey } = await req.json();
     if (!resume || !jobDescription)
       return NextResponse.json({ error: 'Missing resume or job description' }, { status: 400 });
 
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) return NextResponse.json({ error: 'API key not configured' }, { status: 500 });
+
+    const actionType = 'resume_optimizer' as const;
+    const cost = creditCostForAction(actionType);
+    const chargeKey = String(idempotencyKey || `${userId || 'anonymous'}:optimizer:${Date.now()}:${Math.random().toString(36).slice(2)}`);
+    if (userId) {
+      await assertCanRunPaidAction({ userId, actionType, cost, idempotencyKey: chargeKey });
+    }
 
     const prompt = `You are an expert resume coach and ATS specialist. Analyze the resume against the job description and respond ONLY with valid JSON (no markdown, no backticks, no extra text).
 
@@ -50,7 +63,7 @@ Respond with this exact JSON structure:
       const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
       const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
       if (supabaseUrl && serviceKey) {
-        await fetch(`${supabaseUrl}/rest/v1/optimizations`, {
+        const saveResponse = await fetch(`${supabaseUrl}/rest/v1/optimizations`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -67,12 +80,18 @@ Respond with this exact JSON structure:
             optimized_summary: parsed.optimized_summary,
           }),
         });
+
+        if (!saveResponse.ok) throw new Error('Failed to save optimization');
+        await recordPaidActionSuccess({ userId, actionType, cost, idempotencyKey: chargeKey });
       }
     }
 
     return NextResponse.json(parsed);
   } catch (e) {
     console.error(e);
+    if (e instanceof PaymentRequiredError) {
+      return NextResponse.json({ error: e.message, paymentRequired: true, ...e.details }, { status: 402 });
+    }
     return NextResponse.json({ error: 'Failed to analyze resume' }, { status: 500 });
   }
 }

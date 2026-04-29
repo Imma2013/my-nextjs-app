@@ -13,6 +13,7 @@ import { z } from 'zod';
 import { Composio } from '@composio/core';
 import { VercelProvider } from '@composio/vercel';
 import { searchJobs } from '@/lib/jobs';
+import { inferResumeBillingAction } from '@/lib/billing';
 
 type ChatMessage = UIMessage<{ sessionId?: string }>;
 
@@ -78,11 +79,13 @@ export async function POST(req: NextRequest) {
       userId,
       sessionId,
       resumeId,
+      idempotencyKey,
     }: {
       messages?: ChatMessage[];
       userId?: string;
       sessionId?: string | null;
       resumeId?: string | null;
+      idempotencyKey?: string | null;
     } = await req.json();
 
     const apiKey = process.env.GEMINI_API_KEY;
@@ -169,13 +172,30 @@ export async function POST(req: NextRequest) {
         }),
         execute: async ({ resume_id, instruction }) => {
           const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+          const actionType = inferResumeBillingAction(instruction);
           const res = await fetch(`${baseUrl}/api/resume-edit`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ resumeId: resume_id, userId, message: instruction }),
+            body: JSON.stringify({
+              resumeId: resume_id,
+              userId,
+              message: instruction,
+              billingAction: actionType,
+              idempotencyKey: `${idempotencyKey || generateId()}:edit_resume:${resume_id}`,
+            }),
           });
           const data = await res.json();
-          return { success: res.ok, reply: data.reply || 'Resume updated successfully', resume: data.resume };
+          if (res.status === 402) {
+            return {
+              success: false,
+              paymentRequired: true,
+              reply: data.error || 'You need credits to edit this resume with AI.',
+              credits: data.credits,
+              cost: data.cost,
+              freeTailorAvailable: data.freeTailorAvailable,
+            };
+          }
+          return { success: res.ok, reply: data.reply || 'Resume updated successfully', resume: data.resume, billing: data.billing };
         },
       }),
     };
