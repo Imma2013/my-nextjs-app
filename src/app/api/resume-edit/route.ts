@@ -9,8 +9,8 @@ import {
   recordPaidActionSuccess,
   type BillingAction,
 } from '@/lib/billing';
+import { generateGeminiContent, geminiUserError } from '@/lib/gemini';
 
-const GEMINI_MODEL = 'gemini-2.5-flash';
 type EditOp = { operation?: 'replace' | 'add' | 'remove'; path: string; value?: unknown };
 
 function client() {
@@ -120,14 +120,13 @@ function applyOp(parsedInput: any, op: EditOp) {
   return parsed;
 }
 
-async function geminiOps(message: string, parsed: any): Promise<{ operations: EditOp[]; reply?: string }> {
+async function geminiOps(message: string, parsed: any): Promise<{ operations: EditOp[]; reply?: string; model?: string }> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return { operations: [] };
   const prompt = `Convert this resume edit request into JSON operations only. Do not return markdown or a full resume. Paths must use experience.0.role, experience.0.company, experience.0.location, experience.0.dates, experience.0.bullets.0, skills, education.0.degree. For 'make skills say X' or 'set skills to X', return operation replace, path skills, value [X]. For 'add skill X', return operation add, path skills, value X. If the user pastes a full job description, experience block, or a chunk of text to add as a job, return an operation with operation: 'add', path: 'experience', and a value object containing exactly these fields: { role, company, location, dates, bullets: [...] }. Ensure bullets is an array of strings. Return a JSON object with 'operations' array and a short, conversational 'reply' string confirming the specific change (DO NOT put any JSON or full resume text in the reply field, just a short human-readable confirmation). Current resume JSON: ${JSON.stringify(parsed).slice(0, 9000)} Request: ${message}`;
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
+  const { data, model } = await generateGeminiContent({
+    apiKey,
+    body: {
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
       generationConfig: {
         responseMimeType: 'application/json',
@@ -140,11 +139,9 @@ async function geminiOps(message: string, parsed: any): Promise<{ operations: Ed
           required: ['operations']
         }
       }
-    })
+    }
   });
-  const data = await res.json();
-  if (!res.ok || data.error) return { operations: [] };
-  try { return JSON.parse((data.candidates?.[0]?.content?.parts?.[0]?.text || '{}').replace(/```json|```/g, '').trim()); }
+  try { return { ...JSON.parse((data.candidates?.[0]?.content?.parts?.[0]?.text || '{}').replace(/```json|```/g, '').trim()), model }; }
   catch { return { operations: [] }; }
 }
 
@@ -174,10 +171,12 @@ export async function POST(req: NextRequest) {
       ? [edit as EditOp]
       : deterministicOps(String(message || value || ''));
     let reply = '';
+    let processedBy: string | undefined;
     if (!operations.length && message) {
       const ai = await geminiOps(String(message), parsed);
       operations = Array.isArray(ai.operations) ? ai.operations : [];
       reply = ai.reply || '';
+      processedBy = ai.model;
     }
     if (!operations.length && value) operations = [{ operation: 'replace', path: 'experience.0.role', value }];
     if (!operations.length) return NextResponse.json({ handled: false, reply: 'I understood that as chat, not a saved resume edit.' });
@@ -206,12 +205,12 @@ export async function POST(req: NextRequest) {
     }
 
     const count = operations.length;
-    return NextResponse.json({ resume: saved.data, reply: reply || `Saved ${count} resume edit${count === 1 ? '' : 's'}. You should see the preview update now.`, operations, billing });
+    return NextResponse.json({ resume: saved.data, reply: reply || `Saved ${count} resume edit${count === 1 ? '' : 's'}. You should see the preview update now.`, operations, billing, processedBy });
   } catch (e) {
     console.error(e);
     if (e instanceof PaymentRequiredError) {
       return NextResponse.json({ error: e.message, paymentRequired: true, ...e.details }, { status: 402 });
     }
-    return NextResponse.json({ error: e instanceof Error ? e.message : 'Failed to edit resume' }, { status: 500 });
+    return NextResponse.json({ error: geminiUserError(e) || 'Failed to edit resume' }, { status: 500 });
   }
 }

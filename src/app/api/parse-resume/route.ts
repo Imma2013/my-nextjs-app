@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { generateGeminiContent, geminiUserError } from '@/lib/gemini';
 
-const GEMINI_MODEL = 'gemini-2.5-flash';
 const MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024;
 
 const SUPPORTED_MIME_TYPES = new Set([
@@ -67,37 +67,26 @@ Rules:
 - Do not invent missing details.
 - If the document is not a resume, still extract the readable text.`;
 
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [
-            {
-              role: 'user',
-              parts: [
-                { text: prompt },
-                {
-                  inlineData: {
-                    mimeType,
-                    data: base64File,
-                  },
+    const { data, model } = await generateGeminiContent({
+      apiKey,
+      body: {
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              { text: prompt },
+              {
+                inlineData: {
+                  mimeType,
+                  data: base64File,
                 },
-              ],
-            },
-          ],
-          generationConfig: { responseMimeType: 'application/json' },
-        }),
-      }
-    );
-
-    const data = await response.json();
-
-    if (!response.ok || data.error) {
-      const message = data.error?.message || 'Gemini failed to read the attachment';
-      throw new Error(message);
-    }
+              },
+            ],
+          },
+        ],
+        generationConfig: { responseMimeType: 'application/json' },
+      },
+    });
 
     const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text ?? '{}';
     const parsed = JSON.parse(cleanGeminiJson(rawText));
@@ -116,11 +105,11 @@ Rules:
       issues: Array.isArray(parsed.issues) ? parsed.issues : [],
       fileName: file.name,
       mimeType,
-      processedBy: GEMINI_MODEL,
+      processedBy: model,
     });
   } catch (e) {
     console.error(e);
-    const message = e instanceof Error ? e.message : 'Failed to parse file';
+    const message = geminiUserError(e) || 'Failed to parse file';
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

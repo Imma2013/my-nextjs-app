@@ -5,8 +5,7 @@ import {
   PaymentRequiredError,
   recordPaidActionSuccess,
 } from '@/lib/billing';
-
-const GEMINI_MODEL = 'gemini-2.5-flash';
+import { generateGeminiContent, geminiUserError } from '@/lib/gemini';
 
 export async function POST(req: NextRequest) {
   try {
@@ -41,20 +40,13 @@ Respond with this exact JSON structure:
   "optimized_summary": "<3-4 sentence rewritten summary tailored to this job>"
 }`;
 
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ role: 'user', parts: [{ text: prompt }] }],
-          generationConfig: { responseMimeType: 'application/json' },
-        }),
-      }
-    );
-
-    const data = await response.json();
-    if (data.error) throw new Error(data.error.message);
+    const { data, model } = await generateGeminiContent({
+      apiKey,
+      body: {
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: { responseMimeType: 'application/json' },
+      },
+    });
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text ?? '{}';
     const parsed = JSON.parse(text.replace(/```json|```/g, '').trim());
 
@@ -86,12 +78,12 @@ Respond with this exact JSON structure:
       }
     }
 
-    return NextResponse.json(parsed);
+    return NextResponse.json({ ...parsed, processedBy: model });
   } catch (e) {
     console.error(e);
     if (e instanceof PaymentRequiredError) {
       return NextResponse.json({ error: e.message, paymentRequired: true, ...e.details }, { status: 402 });
     }
-    return NextResponse.json({ error: 'Failed to analyze resume' }, { status: 500 });
+    return NextResponse.json({ error: geminiUserError(e) || 'Failed to analyze resume' }, { status: 500 });
   }
 }

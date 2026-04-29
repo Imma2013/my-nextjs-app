@@ -6,6 +6,7 @@ import {
   stepCountIs,
   streamText,
   tool,
+  wrapLanguageModel,
   type UIMessage,
 } from 'ai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
@@ -14,6 +15,7 @@ import { Composio } from '@composio/core';
 import { VercelProvider } from '@composio/vercel';
 import { searchJobs } from '@/lib/jobs';
 import { inferResumeBillingAction } from '@/lib/billing';
+import { createGeminiFallbackMiddleware, GEMINI_MODEL_FALLBACKS, geminiUserError } from '@/lib/gemini';
 
 type ChatMessage = UIMessage<{ sessionId?: string }>;
 
@@ -202,13 +204,19 @@ export async function POST(req: NextRequest) {
 
     const googleProvider = createGoogleGenerativeAI({ apiKey });
     const modelMessages = await convertToModelMessages(messages);
+    const model = wrapLanguageModel({
+      model: googleProvider(GEMINI_MODEL_FALLBACKS[0]),
+      middleware: createGeminiFallbackMiddleware(modelId => googleProvider(modelId)),
+      modelId: GEMINI_MODEL_FALLBACKS.join(' -> '),
+    });
 
     const result = streamText({
-      model: googleProvider('gemini-2.5-flash'),
+      model,
       system: systemPrompt,
       messages: modelMessages,
       tools: { ...composioTools, ...customTools },
       stopWhen: stepCountIs(8),
+      maxRetries: 0,
     });
 
     return result.toUIMessageStreamResponse<ChatMessage>({
@@ -231,7 +239,7 @@ export async function POST(req: NextRequest) {
     });
   } catch (e: unknown) {
     console.error(e);
-    const message = e instanceof Error ? e.message : 'Unknown error';
+    const message = geminiUserError(e) || 'Unknown error';
     return NextResponse.json({ error: `Chat failed: ${message}` }, { status: 500 });
   }
 }

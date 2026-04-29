@@ -2,12 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { PDFExtract } from 'pdf.js-extract';
 import mammoth from 'mammoth';
 import { createClient } from '@supabase/supabase-js';
+import { generateGeminiContent, geminiUserError } from '@/lib/gemini';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder.supabase.co';
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || 'placeholder';
 const supabase = createClient(supabaseUrl, serviceKey);
-
-const GEMINI_MODEL = 'gemini-2.5-flash';
 
 export async function POST(req: NextRequest) {
   try {
@@ -51,20 +50,13 @@ Return this exact structure:
   "projects": [{"title": "", "description": "", "technologies": [], "link": "", "bullets": []}]
 }`;
 
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ role: 'user', parts: [{ text: prompt }] }],
-          generationConfig: { responseMimeType: 'application/json' },
-        }),
-      }
-    );
-
-    const data = await response.json();
-    if (data.error) throw new Error(data.error.message);
+    const { data, model } = await generateGeminiContent({
+      apiKey,
+      body: {
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: { responseMimeType: 'application/json' },
+      },
+    });
     const parsedText = data.candidates?.[0]?.content?.parts?.[0]?.text ?? '{}';
     const parsed = JSON.parse(parsedText.replace(/```json|```/g, '').trim());
 
@@ -93,9 +85,9 @@ Return this exact structure:
       ),
     ]);
 
-    return NextResponse.json({ success: true, resume_id: resume.id });
+    return NextResponse.json({ success: true, resume_id: resume.id, processedBy: model });
   } catch (e: any) {
     console.error(e);
-    return NextResponse.json({ error: e.message || 'Failed to parse and save resume' }, { status: 500 });
+    return NextResponse.json({ error: geminiUserError(e) || 'Failed to parse and save resume' }, { status: 500 });
   }
 }
