@@ -116,6 +116,7 @@ export default function Home() {
   const [checkoutBusy, setCheckoutBusy] = useState('');
   const [checkoutError, setCheckoutError] = useState('');
   const [billingPortalBusy, setBillingPortalBusy] = useState(false);
+  const [resumePreviewOpen, setResumePreviewOpen] = useState(false);
 
   const {
     messages,
@@ -136,7 +137,10 @@ export default function Home() {
         .filter((part: any) => getPartToolName(part) === 'edit_resume')
         .map(getPartOutput)
         .some((output: any) => output?.paymentRequired);
-      if (resumeFromTool) setActiveResume(resumeFromTool);
+      if (resumeFromTool) {
+        if (resumeFromTool.id !== activeResume?.id) setResumePreviewOpen(false);
+        setActiveResume(resumeFromTool);
+      }
       if (paymentRequired) openBillingModal('out_of_credits');
       if (userId) {
         loadSessions(userId);
@@ -171,6 +175,7 @@ export default function Home() {
       resumedCheckoutRef.current = true;
       window.localStorage.removeItem('pendingTailorResume');
       setActiveResume(pending.resume);
+      setResumePreviewOpen(false);
       setShowDashboard(false);
       setInput('');
       void sendChatMessage(
@@ -281,7 +286,10 @@ export default function Home() {
     if (!confirm('Are you sure you want to delete this resume?')) return;
     const res = await fetch(`/api/resumes?userId=${encodeURIComponent(userId)}&resumeId=${encodeURIComponent(id)}`, { method: 'DELETE' });
     if (res.ok) {
-      if (activeResume?.id === id) setActiveResume(null);
+      if (activeResume?.id === id) {
+        setActiveResume(null);
+        setResumePreviewOpen(false);
+      }
       loadResumes(userId);
     }
   }
@@ -292,6 +300,7 @@ export default function Home() {
     if (res.ok) {
       setActiveSessionId(id);
       setActiveResume(data.session?.resumes || null);
+      setResumePreviewOpen(false);
       setMessages((data.messages || []).map(savedMessageToUIMessage));
       setShowDashboard(false);
     }
@@ -300,6 +309,7 @@ export default function Home() {
   function newChat() {
     setActiveSessionId(null);
     setActiveResume(null);
+    setResumePreviewOpen(false);
     setMessages([]);
     setInput('');
     setShowDashboard(false);
@@ -322,6 +332,7 @@ export default function Home() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Upload failed');
       setActiveResume(data.resume);
+      setResumePreviewOpen(false);
       if (data.sessionId) setActiveSessionId(data.sessionId);
       await loadSessions();
       await loadResumes();
@@ -670,7 +681,7 @@ export default function Home() {
         </div>
         <div className="flex flex-col gap-2">
           <button onClick={newChat} className="flex items-center gap-3 rounded-lg bg-white/15 p-3 text-sm font-bold hover:bg-white/25"><span>+</span> New Chat</button>
-          <button onClick={() => { if (!userId) { setShowAuthModal(true); return; } setShowDashboard(true); setActiveResume(null); loadResumes(); }} className={`flex items-center gap-3 rounded-lg p-3 text-sm hover:bg-white/10 ${showDashboard ? 'bg-white/20 font-bold' : ''}`}><span>[]</span> Resumes / CVs</button>
+          <button onClick={() => { if (!userId) { setShowAuthModal(true); return; } setShowDashboard(true); setActiveResume(null); setResumePreviewOpen(false); loadResumes(); }} className={`flex items-center gap-3 rounded-lg p-3 text-sm hover:bg-white/10 ${showDashboard ? 'bg-white/20 font-bold' : ''}`}><span>[]</span> Resumes / CVs</button>
         </div>
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <div className="mb-2 px-2 text-xs font-bold text-white/50">CHAT HISTORY</div>
@@ -738,7 +749,7 @@ export default function Home() {
                       <p className="text-xs text-slate-500">Uploaded on {new Date(r.created_at).toLocaleDateString()}</p>
                     </div>
                     <div className="flex items-center gap-2">
-                      <button onClick={() => { setActiveResume(r); setShowDashboard(false); setMessages(prev => [...prev, makeTextMessage('assistant', 'Resume loaded. Ask me to edit it, search jobs, or click directly in the preview to edit manually.')]); }} className="rounded-md bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-200">Select for Chat</button>
+                      <button onClick={() => { setActiveResume(r); setResumePreviewOpen(false); setShowDashboard(false); setMessages(prev => [...prev, makeTextMessage('assistant', 'Resume loaded. Ask me to edit it, search jobs, or click directly in the preview to edit manually.')]); }} className="rounded-md bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-200">Select for Chat</button>
                       <button onClick={() => deleteResume(r.id)} className="rounded-md bg-red-50 px-3 py-1.5 text-xs font-bold text-red-600 hover:bg-red-100">Delete</button>
                     </div>
                   </div>
@@ -775,32 +786,42 @@ export default function Home() {
             </section>
           )
         ) : (
-          <section className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_430px] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-            <div className="flex min-h-0 min-w-0 flex-col overflow-hidden border-r border-slate-200">
-              <div className="flex h-14 shrink-0 items-center justify-between border-b border-slate-200 px-5">
-                <b>Resume</b><span className="text-xs text-slate-500">Click text to edit manually</span>
+          <section className="mx-auto my-4 flex min-h-0 w-full max-w-6xl flex-1 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div className="flex shrink-0 flex-col gap-3 border-b border-slate-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+              <div className="min-w-0">
+                <b className="block truncate text-sm text-slate-900">{activeResume.title || activeResume.file_name || 'Active resume'}</b>
+                <span className="text-xs text-slate-500">Chat, tailor, or open the preview to edit manually</span>
               </div>
-              <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-slate-100 p-7 overscroll-contain">
-                <ResumeDocument resume={activeResume} onEdit={handleManualEdit} />
+              <div className="flex shrink-0 flex-wrap gap-2">
+                <button
+                  onClick={() => setResumePreviewOpen(open => !open)}
+                  className={`rounded-lg px-4 py-2 text-xs font-bold ${resumePreviewOpen ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}
+                >
+                  {resumePreviewOpen ? 'Hide Preview' : 'Resume Preview'}
+                </button>
+                <button onClick={() => { setActiveResume(null); setResumePreviewOpen(false); setShowDashboard(true); loadResumes(); }} className="rounded-lg px-4 py-2 text-xs font-bold text-slate-500 hover:bg-slate-50">RESUMES</button>
               </div>
             </div>
-            <aside className="flex min-h-0 min-w-0 flex-col overflow-hidden bg-white">
-              <div className="flex h-14 shrink-0 items-center gap-2 border-b border-slate-200 px-5">
-                <button className="rounded-lg bg-slate-100 px-4 py-2 text-xs font-bold">CHAT</button>
-                <button onClick={() => { setActiveResume(null); setShowDashboard(true); loadResumes(); }} className="rounded-lg px-4 py-2 text-xs font-bold text-slate-500 hover:bg-slate-50">RESUMES</button>
-              </div>
-              <div className="min-h-0 flex-1 space-y-5 overflow-y-auto overflow-x-hidden overscroll-contain p-5">
-                <div className="w-40 rounded-lg border p-2 shadow-sm">
-                  <div className="flex h-20 items-center justify-center rounded bg-slate-100 text-xs font-bold text-blue-600">AI AGENT</div>
-                  <div className="mt-2 flex justify-between"><div><b className="text-sm">Resume</b><p className="text-xs text-slate-500">Editable</p></div><span className="text-blue-600">OK</span></div>
+            <div className="min-h-0 flex-1 space-y-5 overflow-y-auto overflow-x-hidden overscroll-contain p-4 sm:p-5">
+              {renderMessages(false)}
+            </div>
+            {resumePreviewOpen && (
+              <div className="shrink-0 border-t border-slate-200 bg-slate-100">
+                <div className="flex h-12 items-center justify-between px-4 sm:px-5">
+                  <b className="text-sm text-slate-900">Resume Preview</b>
+                  <span className="text-xs text-slate-500">Click text to edit manually</span>
                 </div>
-                {renderMessages(true)}
+                <div className="max-h-[52vh] overflow-x-auto overflow-y-auto p-3 overscroll-contain sm:p-5">
+                  <ResumeDocument resume={activeResume} onEdit={handleManualEdit} />
+                </div>
               </div>
-              <div className="shrink-0 border-t border-slate-200 p-5">
+            )}
+            <div className="shrink-0 border-t border-slate-200 p-4 sm:p-5">
+              <div className="mx-auto max-w-3xl">
                 {uploading && <p className="mb-2 text-xs text-slate-500">Parsing with Gemini...</p>}
                 {composer}
               </div>
-            </aside>
+            </div>
           </section>
         )}
       </main>
