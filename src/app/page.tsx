@@ -5,32 +5,37 @@ import { supabase } from '@/lib/supabase';
 import { auth, onAuthStateChanged, googleProvider } from '@/lib/firebase';
 import { signInWithPopup, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from 'firebase/auth';
 import { useChat } from '@ai-sdk/react';
+import { DefaultChatTransport, getToolName, isToolUIPart, type UIMessage } from 'ai';
 
 import ResumeDocument from '@/components/ResumeDocument';
 import JobSearch from '@/components/JobSearch';
 import { ToolCallDisplay } from '@/components/ToolCallDisplay';
 
-type Message = { role: 'user' | 'assistant'; content: string };
+type ChatMessage = UIMessage<{ sessionId?: string }>;
 type ResumeContext = { id: string; title?: string; file_name?: string; summary?: string; candidate_name?: string; headline?: string; preview_url?: string; parsed_json?: any };
 type ChatSession = { id: string; title: string; resumes?: ResumeContext | null };
 type EditPayload = { operation: 'replace' | 'add' | 'remove'; path: string; value?: unknown };
-const EDIT_RE = /\b(edit|change|update|replace|rename|set|make|rewrite|add|remove|delete)\b/i;
+
+function makeTextMessage(role: 'user' | 'assistant', text: string): ChatMessage {
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    role,
+    parts: [{ type: 'text', text }],
+  };
+}
 
 export default function Home() {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [activeResume, setActiveResume] = useState<ResumeContext | null>(null);
   const [userId, setUserId] = useState('');
-  
-  const [messages, setMessages] = useState<any[]>([]);
+
   const [activeTab, setActiveTab] = useState<'resume' | 'jobs'>('resume');
   const [input, setInput] = useState('');
-  const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const aiLoading = busy || uploading;
   const fileRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
-  
+
   // Auth state
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -40,24 +45,39 @@ export default function Home() {
   const [showDashboard, setShowDashboard] = useState(false);
   const [showJobSearch, setShowJobSearch] = useState(false);
   const [resumesList, setResumesList] = useState<any[]>([]);
+  const {
+    messages,
+    setMessages,
+    sendMessage: sendChatMessage,
+    status: chatStatus,
+    error: chatError,
+  } = useChat<ChatMessage>({
+    transport: new DefaultChatTransport({ api: '/api/chat' }),
+    onFinish: ({ message }) => {
+      const sessionId = message.metadata?.sessionId;
+      if (sessionId) setActiveSessionId(sessionId);
+      if (userId) loadSessions(userId);
+    },
+  });
+  const busy = chatStatus === 'submitted' || chatStatus === 'streaming';
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
-  useEffect(() => { 
-    const unsubscribe = onAuthStateChanged(auth, async (user) => { 
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
         setUserId(user.uid);
         setShowAuthModal(false);
       } else {
-        setUserId(''); 
+        setUserId('');
       }
-    }); 
-    return () => unsubscribe(); 
+    });
+    return () => unsubscribe();
   }, []);
   useEffect(() => { if (userId) { loadSessions(userId); loadResumes(userId); } }, [userId]);
-  useEffect(() => { 
-    if (!activeResume?.id) return; 
-    const c = supabase.channel(`resume-${activeResume.id}`).on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'resumes', filter: `id=eq.${activeResume.id}` }, payload => setActiveResume(prev => prev?.id === payload.new.id ? { ...prev, ...payload.new } as ResumeContext : prev)).subscribe(); 
-    return () => { supabase.removeChannel(c); }; 
+  useEffect(() => {
+    if (!activeResume?.id) return;
+    const c = supabase.channel(`resume-${activeResume.id}`).on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'resumes', filter: `id=eq.${activeResume.id}` }, payload => setActiveResume(prev => prev?.id === payload.new.id ? { ...prev, ...payload.new } as ResumeContext : prev)).subscribe();
+    return () => { supabase.removeChannel(c); };
   }, [activeResume?.id]);
 
   async function loadSessions(uid = userId) { if (!uid) return; const res = await fetch(`/api/chat/sessions?userId=${encodeURIComponent(uid)}`); const data = await res.json(); if (res.ok) setSessions(data.sessions || []); }
@@ -73,77 +93,60 @@ export default function Home() {
   }
   async function loadChat(id: string) { const res = await fetch(`/api/chat/sessions/${id}?userId=${encodeURIComponent(userId)}`); const data = await res.json(); if (res.ok) { setActiveSessionId(id); setActiveResume(data.session?.resumes || null); setMessages((data.messages || []).map((m: any, i: number) => ({ id: `msg-${i}`, role: m.role, parts: [{type:'text', text: m.content }] }))); setShowDashboard(false); setShowJobSearch(false); } }
   function newChat() { setActiveSessionId(null); setActiveResume(null); setMessages([]); setInput(''); setShowDashboard(false); setShowJobSearch(false); }
-  
-  async function uploadFile(e: React.ChangeEvent<HTMLInputElement>) { 
-    const file = e.target.files?.[0]; 
-    if (!file) return; 
+
+  async function uploadFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
     if (!userId) {
       setShowAuthModal(true);
       return;
     }
-    setUploading(true); 
-    try { 
-      const fd = new FormData(); fd.append('file', file); fd.append('userId', userId); 
-      if (activeSessionId) fd.append('sessionId', activeSessionId); 
-      const res = await fetch('/api/resumes', { method: 'POST', body: fd }); 
-      const data = await res.json(); 
-      if (!res.ok) throw new Error(data.error || 'Upload failed'); 
-      setActiveResume(data.resume); 
-      if (data.sessionId) setActiveSessionId(data.sessionId); 
-      await loadSessions(); 
-      setMessages([{ id: Date.now().toString(), role: 'assistant', parts: [{type:'text', text:'Resume uploaded and converted into editable structured data. Ask me to edit it, or click directly in the preview to edit manually.'}] }]); 
-    } catch (err) { 
-      setMessages([{ id: Date.now().toString(), role: 'assistant', parts: [{type:'text', text:'Upload failed: ' + (err instanceof Error ? err.message : 'Unknown error')}] }]); 
-    } finally { 
-      setUploading(false); e.target.value = ''; 
-    } 
+    setUploading(true);
+    try {
+      const fd = new FormData(); fd.append('file', file); fd.append('userId', userId);
+      if (activeSessionId) fd.append('sessionId', activeSessionId);
+      const res = await fetch('/api/resumes', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Upload failed');
+      setActiveResume(data.resume);
+      if (data.sessionId) setActiveSessionId(data.sessionId);
+      await loadSessions();
+      setMessages([makeTextMessage('assistant', 'Resume uploaded and converted into editable structured data. Ask me to edit it, or click directly in the preview to edit manually.')]);
+    } catch (err) {
+      setMessages([makeTextMessage('assistant', 'Upload failed: ' + (err instanceof Error ? err.message : 'Unknown error'))]);
+    } finally {
+      setUploading(false); e.target.value = '';
+    }
   }
-  
+
   async function saveResumeEdit(edit: EditPayload | { message: string }) { if (!activeResume || !userId) throw new Error('No active resume'); const res = await fetch('/api/resume-edit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ resumeId: activeResume.id, userId, edit: 'path' in edit ? edit : undefined, message: 'message' in edit ? edit.message : undefined }) }); const data = await res.json(); if (!res.ok) throw new Error(data.error || 'Resume edit failed'); if (!data.resume) throw new Error(data.reply || 'Could not map this to a saved resume field'); setActiveResume(data.resume); return data.reply || 'Updated the resume preview.'; }
-  async function handleManualEdit(edit: EditPayload) { 
+  async function handleManualEdit(edit: EditPayload) {
     if (!userId) { setShowAuthModal(true); return; }
-    try { await saveResumeEdit(edit); } catch (err) { setMessages(prev => [...prev, { id: Date.now().toString(), role: 'assistant', parts: [{type:'text', text:'Manual edit failed: ' + (err instanceof Error ? err.message : 'Unknown error')}] }]); } 
+    try { await saveResumeEdit(edit); } catch (err) { setMessages(prev => [...prev, makeTextMessage('assistant', 'Manual edit failed: ' + (err instanceof Error ? err.message : 'Unknown error'))]); }
   }
-  
-  async function sendMessage(text?: string) { 
-    const msg = text ?? input; 
-    if (!msg.trim()) return; 
+
+  async function sendMessage(text?: string) {
+    const msg = text ?? input;
+    if (!msg.trim()) return;
     if (!userId) {
       setShowAuthModal(true);
       return;
     }
-    setInput(''); 
-    
-    setBusy(true); 
-    const next: any[] = [...messages, { id: Date.now().toString(), role: 'user', parts: [{type:'text', text: msg }] }]; 
-    setMessages(next); 
-    try { 
-      if (activeResume && EDIT_RE.test(msg)) { 
-        const reply = await saveResumeEdit({ message: msg }); 
-        setMessages([...next, { id: (Date.now()+1).toString(), role: 'assistant', parts: [{type:'text', text: reply }] }]); 
-        await loadSessions(); 
-        return; 
-      } 
-      
-      const res = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages: next, userId, sessionId: activeSessionId, resumeId: activeResume?.id }) }); 
-      const data = await res.json(); 
-      if (!res.ok) throw new Error(data.error || 'Chat failed'); 
-      const parts = [];
-      if (data.reply) parts.push({ type: 'text', text: data.reply });
-      if (data.toolResults) {
-        data.toolResults.forEach((tr: any) => parts.push({ type: 'tool', toolCallId: tr.toolCallId, toolName: tr.toolName, args: tr.args, result: tr.result, state: 'output-available' }));
-      }
-      setMessages([...next, { id: Date.now().toString(), role: 'assistant', parts }]); 
-      if (data.sessionId) setActiveSessionId(data.sessionId); 
-      if (data.resume) setActiveResume(data.resume); 
-      await loadSessions(); 
-    } catch (err) { 
-      setMessages([...messages, { id: Date.now().toString(), role: 'user', parts: [{type:'text', text: msg }] }, { id: (Date.now()+1).toString(), role: 'assistant', parts: [{type:'text', text:'I understood this, but could not complete it: ' + (err instanceof Error ? err.message : 'Unknown error')}] }]); 
-    } finally { 
-      setBusy(false); 
-    } 
+    setInput('');
+    try {
+      await sendChatMessage(
+        { text: msg },
+        { body: { userId, sessionId: activeSessionId, resumeId: activeResume?.id } },
+      );
+      await loadSessions();
+    } catch (err) {
+      setMessages(prev => [
+        ...prev,
+        makeTextMessage('assistant', 'I understood this, but could not complete it: ' + (err instanceof Error ? err.message : 'Unknown error')),
+      ]);
+    }
   }
-  
+
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError('');
@@ -166,6 +169,30 @@ export default function Home() {
       setAuthError(err.message);
     }
   };
+
+  function renderMessageParts(m: ChatMessage) {
+    return m.parts.map((part: any, j: number) => {
+      if (part.type === 'text') return <span key={j}>{part.text}</span>;
+      if (isToolUIPart(part)) {
+        const isLoading = part.state !== 'output-available' && part.state !== 'output-error';
+        const output = part.state === 'output-available'
+          ? part.output
+          : part.state === 'output-error'
+            ? part.errorText
+            : undefined;
+        return (
+          <ToolCallDisplay
+            key={part.toolCallId}
+            toolName={getToolName(part)}
+            input={part.input}
+            output={output}
+            isLoading={isLoading}
+          />
+        );
+      }
+      return null;
+    });
+  }
 
   const authModal = showAuthModal && (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm">
@@ -192,14 +219,14 @@ export default function Home() {
 
   const composer = (
     <div className="shrink-0 rounded-xl border-2 border-blue-500 bg-white p-4 shadow-sm relative z-10">
-      <textarea 
-        value={input} 
-        onChange={e => setInput(e.target.value)} 
-        onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }} 
-        rows={activeResume ? 3 : 5} 
-        placeholder="Ask for a resume edit, career advice, or attach a PDF/DOCX..." 
-        className="block w-full resize-none bg-transparent text-sm text-slate-900 outline-none placeholder:text-slate-400" 
-        disabled={uploading || busy} 
+      <textarea
+        value={input}
+        onChange={e => setInput(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
+        rows={activeResume ? 3 : 5}
+        placeholder="Ask for a resume edit, career advice, or attach a PDF/DOCX..."
+        className="block w-full resize-none bg-transparent text-sm text-slate-900 outline-none placeholder:text-slate-400"
+        disabled={uploading || busy}
       />
       <div className="mt-3 flex items-center justify-between">
         <button onClick={() => fileRef.current?.click()} disabled={uploading} className="rounded-full bg-slate-100 px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-200 disabled:opacity-50">+ Attach a Resume</button>
@@ -284,7 +311,7 @@ export default function Home() {
                       <p className="text-xs text-slate-500">Uploaded on {new Date(r.created_at).toLocaleDateString()}</p>
                     </div>
                     <div className="flex items-center gap-2">
-                      <button onClick={() => { setActiveResume(r); setShowDashboard(false); setShowJobSearch(false); setMessages([{ role: 'assistant', parts: [{type:'text', text:'Resume loaded. Ask me to edit it, or click directly in the preview to edit manually.'}] }]); }} className="rounded-md bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-200">Select for Chat</button>
+                      <button onClick={() => { setActiveResume(r); setShowDashboard(false); setShowJobSearch(false); setMessages([makeTextMessage('assistant', 'Resume loaded. Ask me to edit it, or click directly in the preview to edit manually.')]); }} className="rounded-md bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-200">Select for Chat</button>
                       <button onClick={() => deleteResume(r.id)} className="rounded-md bg-red-50 text-red-600 px-3 py-1.5 text-xs font-bold hover:bg-red-100">Delete</button>
                     </div>
                   </div>
@@ -310,28 +337,15 @@ export default function Home() {
                 <b className="text-sm">AI Chat</b>
               </div>
               <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-5 overscroll-contain">
-                {messages.map((m: any, i: number) => (
+                {messages.map((m: ChatMessage, i: number) => (
                   <div key={m.id || i} className={m.role === 'user' ? 'rounded-xl bg-slate-100 p-3 max-w-3xl mx-auto' : 'leading-7 max-w-3xl mx-auto'}>
                     <div className="whitespace-pre-wrap break-words">
-                      {m.parts ? m.parts.map((part: any, j: number) => {
-                        if (part.type === "text") return <span key={j}>{part.text}</span>;
-                        if (part.type === "tool") {
-                          return (
-                            <ToolCallDisplay
-                              key={part.toolCallId}
-                              toolName={part.toolName}
-                              input={part.args}
-                              output={part.state === 'output-available' ? part.result : undefined}
-                              isLoading={part.state !== 'output-available'}
-                            />
-                          );
-                        }
-                        return null;
-                      }) : m.content}
+                      {renderMessageParts(m)}
                     </div>
                   </div>
                 ))}
                 {busy && <div className="text-sm text-slate-500 max-w-3xl mx-auto">Working...</div>}
+                {chatError && <div className="text-sm text-red-500 max-w-3xl mx-auto">{chatError.message}</div>}
                 <div ref={bottomRef} />
               </div>
               <div className="shrink-0 border-t border-slate-200 p-5">
@@ -376,28 +390,15 @@ export default function Home() {
                   <div className="flex h-20 items-center justify-center rounded bg-slate-100 text-xs font-bold text-blue-600">AI AGENT</div>
                   <div className="mt-2 flex justify-between"><div><b className="text-sm">Resume</b><p className="text-xs text-slate-500">Editable</p></div><span className="text-blue-600">✓</span></div>
                 </div>
-                {messages.map((m: any, i: number) => (
+                {messages.map((m: ChatMessage, i: number) => (
                   <div key={m.id || i} className={m.role === 'user' ? 'rounded-xl bg-slate-100 p-3' : 'leading-7'}>
                     <div className="whitespace-pre-wrap break-words">
-                      {m.parts ? m.parts.map((part: any, j: number) => {
-                        if (part.type === "text") return <span key={j}>{part.text}</span>;
-                        if (part.type === "tool") {
-                          return (
-                            <ToolCallDisplay
-                              key={part.toolCallId}
-                              toolName={part.toolName}
-                              input={part.args}
-                              output={part.state === 'output-available' ? part.result : undefined}
-                              isLoading={part.state !== 'output-available'}
-                            />
-                          );
-                        }
-                        return null;
-                      }) : m.content}
+                      {renderMessageParts(m)}
                     </div>
                   </div>
                 ))}
                 {busy && <div className="text-sm text-slate-500">Working...</div>}
+                {chatError && <div className="text-sm text-red-500">{chatError.message}</div>}
                 <div ref={bottomRef} />
               </div>
               <div className="shrink-0 border-t border-slate-200 p-5">

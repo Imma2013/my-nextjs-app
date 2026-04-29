@@ -1,10 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { generateText } from 'ai';
-import { createGoogleGenerativeAI, google } from '@ai-sdk/google';
+import {
+  convertToModelMessages,
+  generateId,
+  stepCountIs,
+  streamText,
+  tool,
+  type UIMessage,
+} from 'ai';
+import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { z } from 'zod';
 import { Composio } from '@composio/core';
 import { VercelProvider } from '@composio/vercel';
+
+type ChatMessage = UIMessage<{ sessionId?: string }>;
 
 function client() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -13,98 +22,140 @@ function client() {
   return createClient(url, key);
 }
 
+function textFromMessage(message?: UIMessage) {
+  if (!message?.parts) return '';
+  return message.parts
+    .filter((part): part is { type: 'text'; text: string } => part.type === 'text')
+    .map(part => part.text)
+    .join('')
+    .trim();
+}
+
 const composio = new Composio({ provider: new VercelProvider() });
 
 export async function POST(req: NextRequest) {
   try {
-    const { messages, resume_id, userId, sessionId } = await req.json();
+    const {
+      messages,
+      userId,
+      sessionId,
+      resumeId,
+    }: {
+      messages?: ChatMessage[];
+      userId?: string;
+      sessionId?: string | null;
+      resumeId?: string | null;
+    } = await req.json();
+
     const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) return NextResponse.json({ error: 'API key not configured' }, { status: 500 });
+    if (!apiKey) {
+      return NextResponse.json({ error: 'API key not configured' }, { status: 500 });
+    }
+    if (!messages?.length) {
+      return NextResponse.json({ error: 'No messages provided' }, { status: 400 });
+    }
 
     const supabase = client();
-    let sid = sessionId;
+    let sid = sessionId || null;
+    const lastMessage = messages[messages.length - 1];
+    const lastUserText = lastMessage.role === 'user' ? textFromMessage(lastMessage) : '';
 
     if (userId) {
-      if (!sid && messages.length > 0) {
-        const firstUserMsg = messages.find((m: any) => m.role === 'user')?.content || 'New Chat';
-        const title = firstUserMsg.length > 48 ? firstUserMsg.slice(0, 48) + '...' : firstUserMsg;
-        const { data: newSession, error: sErr } = await supabase.from('chat_sessions').insert({ user_id: userId, title, resume_id: resume_id || null }).select().single();
-        if (!sErr && newSession) sid = newSession.id;
+      if (!sid) {
+        const firstUserText =
+          textFromMessage(messages.find(message => message.role === 'user')) || 'New Chat';
+        const title = firstUserText.length > 48 ? `${firstUserText.slice(0, 48)}...` : firstUserText;
+        const { data: newSession, error: sessionError } = await supabase
+          .from('chat_sessions')
+          .insert({ user_id: userId, title, resume_id: resumeId || null })
+          .select()
+          .single();
+
+        if (!sessionError && newSession) sid = newSession.id;
       }
 
-      if (sid && messages.length > 0) {
-        const lastMsg = messages[messages.length - 1];
-        if (lastMsg.role === 'user') {
-          await supabase.from('chat_messages').insert({ session_id: sid, user_id: userId, role: 'user', content: lastMsg.content });
-        }
+      if (sid && lastUserText) {
+        await supabase
+          .from('chat_messages')
+          .insert({ session_id: sid, user_id: userId, role: 'user', content: lastUserText });
       }
     }
 
-    let systemPrompt = 'You are an expert resume coach and career advisor. You also have access to 1000+ real-world tools via Composio. You can use these tools to help the user directly (e.g. "email my resume to X", "check my GitHub repos", "save a draft to Notion"). Always be helpful, concise, and professional.';
-    
-    if (resume_id) {
+    let systemPrompt =
+      'You are an expert resume coach and career advisor. You also have access to 1000+ real-world tools via Composio. You can use these tools to help the user directly (e.g. "email my resume to X", "check my GitHub repos", "save a draft to Notion"). Always be helpful, concise, and professional.';
+
+    if (resumeId) {
       try {
-        const { data: resume } = await supabase.from('resumes').select('parsed_json').eq('id', resume_id).single();
+        const { data: resume } = await supabase
+          .from('resumes')
+          .select('parsed_json')
+          .eq('id', resumeId)
+          .single();
         if (resume?.parsed_json) {
           systemPrompt += `\n\nHere is the user's current resume in JSON format:\n${JSON.stringify(resume.parsed_json)}`;
         }
       } catch (err) {
         console.error('Failed to load active resume context:', err);
       }
-      
-      systemPrompt += `\n\nThe user has an active resume (ID: ${resume_id}). When the user asks you to make changes to their resume, you MUST use the "edit_resume" tool provided. Provide clear instructions to the tool, such as "Change the job title to Manager" or "Add a new experience block for Software Engineer at Tech Corp".`;
+
+      systemPrompt += `\n\nThe user has an active resume (ID: ${resumeId}). When the user asks you to make changes to their resume, you MUST use the "edit_resume" tool provided. Pass resume_id as "${resumeId}" and provide a clear natural-language instruction, such as "Change the job title to Manager" or "Add a new experience block for Software Engineer at Tech Corp".`;
     }
 
-    // Set up Composio Session scoped to user (or 'anonymous')
-    const session = await composio.create(userId || "anonymous");
+    const session = await composio.create(userId || 'anonymous');
     const composioTools = await session.tools();
 
-    // Define custom local tools
     const customTools = {
-      edit_resume: {
-        description: 'Edit, update, or add to any part of the user\'s resume. Pass a clear natural language instruction detailing what should be added, changed, or deleted.',
-        parameters: z.object({
+      edit_resume: tool({
+        description:
+          "Edit, update, or add to any part of the user's resume. Pass a clear natural language instruction detailing what should be added, changed, or deleted.",
+        inputSchema: z.object({
           resume_id: z.string().describe('The ID of the resume'),
-          instruction: z.string().describe('A natural language instruction of what to do (e.g. "change job title to Manager", "add this text to the summary")'),
+          instruction: z
+            .string()
+            .describe(
+              'A natural language instruction of what to do (e.g. "change job title to Manager", "add this text to the summary")',
+            ),
         }),
-        execute: async (args: { resume_id: string; instruction: string }) => {
+        execute: async ({ resume_id, instruction }) => {
           const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
           const res = await fetch(`${baseUrl}/api/resume-edit`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ resumeId: args.resume_id, userId, message: args.instruction }),
+            body: JSON.stringify({ resumeId: resume_id, userId, message: instruction }),
           });
           const data = await res.json();
           return { success: res.ok, reply: data.reply || 'Resume updated successfully' };
         },
-      },
+      }),
     };
 
-    const combinedTools = { ...composioTools, ...customTools } as any;
-
-    // Use AI SDK
     const googleProvider = createGoogleGenerativeAI({ apiKey });
-    
-    const result = await generateText({
+    const modelMessages = await convertToModelMessages(messages);
+
+    const result = streamText({
       model: googleProvider('gemini-3-flash-preview'),
       system: systemPrompt,
-      messages: messages.map((m: any) => ({ role: m.role, content: m.content })),
-      tools: combinedTools,
+      messages: modelMessages,
+      tools: { ...composioTools, ...customTools },
+      stopWhen: stepCountIs(8),
     });
 
-    const reply = result.text;
-
-    if (userId && sid && reply) {
-      await supabase.from('chat_messages').insert({ session_id: sid, user_id: userId, role: 'assistant', content: reply });
-    }
-
-    return NextResponse.json({ 
-      reply, 
-      sessionId: sid,
-      toolResults: result.toolResults 
+    return result.toUIMessageStreamResponse<ChatMessage>({
+      originalMessages: messages,
+      generateMessageId: () => generateId(),
+      messageMetadata: () => (sid ? { sessionId: sid } : undefined),
+      onFinish: async ({ responseMessage }) => {
+        const assistantText = textFromMessage(responseMessage);
+        if (userId && sid && assistantText) {
+          await supabase
+            .from('chat_messages')
+            .insert({ session_id: sid, user_id: userId, role: 'assistant', content: assistantText });
+        }
+      },
     });
-  } catch (e: any) {
+  } catch (e: unknown) {
     console.error(e);
-    return NextResponse.json({ error: 'Chat failed: ' + e.message }, { status: 500 });
+    const message = e instanceof Error ? e.message : 'Unknown error';
+    return NextResponse.json({ error: `Chat failed: ${message}` }, { status: 500 });
   }
 }
