@@ -22,6 +22,7 @@ type BillingSummary = {
   currentPeriodEnd?: string | null;
   freeTailorAvailable: boolean;
 };
+type BillingModalReason = 'out_of_credits' | 'upgrade' | 'topup' | 'billing';
 
 function makeTextMessage(role: 'user' | 'assistant', text: string): ChatMessage {
   return {
@@ -110,8 +111,11 @@ export default function Home() {
   const [showDashboard, setShowDashboard] = useState(false);
   const [resumesList, setResumesList] = useState<any[]>([]);
   const [billing, setBilling] = useState<BillingSummary | null>(null);
-  const [showPaywall, setShowPaywall] = useState(false);
+  const [billingModalOpen, setBillingModalOpen] = useState(false);
+  const [billingModalReason, setBillingModalReason] = useState<BillingModalReason>('upgrade');
   const [checkoutBusy, setCheckoutBusy] = useState('');
+  const [checkoutError, setCheckoutError] = useState('');
+  const [billingPortalBusy, setBillingPortalBusy] = useState(false);
 
   const {
     messages,
@@ -133,7 +137,7 @@ export default function Home() {
         .map(getPartOutput)
         .some((output: any) => output?.paymentRequired);
       if (resumeFromTool) setActiveResume(resumeFromTool);
-      if (paymentRequired) setShowPaywall(true);
+      if (paymentRequired) openBillingModal('out_of_credits');
       if (userId) {
         loadSessions(userId);
         loadResumes(userId);
@@ -215,12 +219,19 @@ export default function Home() {
     return billing.credits >= 1;
   }
 
+  function openBillingModal(reason: BillingModalReason) {
+    setBillingModalReason(reason);
+    setCheckoutError('');
+    setBillingModalOpen(true);
+  }
+
   async function startCheckout(checkoutType: 'subscription' | 'topup', value: string) {
     if (!userId) {
       setShowAuthModal(true);
       return;
     }
     setCheckoutBusy(value);
+    setCheckoutError('');
     try {
       const body = checkoutType === 'subscription'
         ? { userId, checkoutType, plan: value, returnPath: window.location.pathname + window.location.search }
@@ -234,7 +245,8 @@ export default function Home() {
       if (!res.ok) throw new Error(data.error || 'Checkout failed');
       window.location.href = data.url;
     } catch (err) {
-      setMessages(prev => [...prev, makeTextMessage('assistant', 'Checkout failed: ' + (err instanceof Error ? err.message : 'Unknown error'))]);
+      setBillingModalOpen(true);
+      setCheckoutError('Checkout failed. ' + (err instanceof Error ? err.message : 'Please try again.'));
     } finally {
       setCheckoutBusy('');
     }
@@ -245,13 +257,23 @@ export default function Home() {
       setShowAuthModal(true);
       return;
     }
-    const res = await fetch('/api/billing/portal', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId, returnPath: window.location.pathname + window.location.search }),
-    });
-    const data = await res.json();
-    if (res.ok) window.location.href = data.url;
+    setBillingPortalBusy(true);
+    setCheckoutError('');
+    try {
+      const res = await fetch('/api/billing/portal', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, returnPath: window.location.pathname + window.location.search }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Could not open billing portal');
+      window.location.href = data.url;
+    } catch (err) {
+      setBillingModalOpen(true);
+      setCheckoutError('Billing portal failed. ' + (err instanceof Error ? err.message : 'Please try again.'));
+    } finally {
+      setBillingPortalBusy(false);
+    }
   }
 
   async function deleteResume(id: string) {
@@ -350,7 +372,7 @@ export default function Home() {
       return;
     }
     if (activeResume && billing && looksLikePaidResumeRequest(msg) && !hasCreditsForResumeAction(msg)) {
-      setShowPaywall(true);
+      openBillingModal('out_of_credits');
       return;
     }
     setInput('');
@@ -393,7 +415,7 @@ export default function Home() {
       if (typeof window !== 'undefined') {
         window.localStorage.setItem('pendingTailorResume', JSON.stringify({ instruction, resume: activeResume }));
       }
-      setShowPaywall(true);
+      openBillingModal('out_of_credits');
       return;
     }
 
@@ -499,35 +521,114 @@ export default function Home() {
   );
 
   const planLabel = billing?.plan === 'pro_plus' ? 'Pro Plus' : billing?.plan === 'pro' ? 'Pro' : 'Free';
-  const paywallModal = showPaywall && (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm">
-      <div className="relative w-full max-w-lg rounded-xl bg-white p-7 shadow-2xl">
-        <button onClick={() => setShowPaywall(false)} className="absolute right-4 top-4 text-slate-400 hover:text-slate-600">x</button>
-        <h2 className="text-xl font-bold text-slate-900">Add credits to continue</h2>
-        <p className="mt-2 text-sm leading-6 text-slate-600">
-          AI resume edits use credits. Job search, uploads, and manual preview edits stay free.
-        </p>
-        <div className="mt-5 grid gap-3">
-          <button onClick={() => startCheckout('subscription', 'pro')} disabled={!!checkoutBusy} className="flex items-center justify-between rounded-lg border border-blue-200 bg-blue-50 p-4 text-left hover:bg-blue-100 disabled:opacity-60">
-            <span><b className="block text-slate-900">Pro</b><span className="text-sm text-slate-600">$19/mo - 30 monthly credits</span></span>
-            <span className="text-sm font-bold text-blue-700">{checkoutBusy === 'pro' ? 'Opening...' : 'Choose'}</span>
-          </button>
-          <button onClick={() => startCheckout('subscription', 'pro_plus')} disabled={!!checkoutBusy} className="flex items-center justify-between rounded-lg border border-slate-200 p-4 text-left hover:bg-slate-50 disabled:opacity-60">
-            <span><b className="block text-slate-900">Pro Plus</b><span className="text-sm text-slate-600">$29/mo - 75 monthly credits</span></span>
-            <span className="text-sm font-bold text-blue-700">{checkoutBusy === 'pro_plus' ? 'Opening...' : 'Choose'}</span>
-          </button>
-        </div>
-        <div className="mt-5 grid grid-cols-3 gap-2">
-          {[
-            ['credits_5', '$5', '5 credits'],
-            ['credits_20', '$15', '20 credits'],
-            ['credits_50', '$29', '50 credits'],
-          ].map(([key, price, label]) => (
-            <button key={key} onClick={() => startCheckout('topup', key)} disabled={!!checkoutBusy} className="rounded-lg border border-slate-200 p-3 text-center hover:bg-slate-50 disabled:opacity-60">
-              <b className="block text-sm text-slate-900">{price}</b>
-              <span className="text-xs text-slate-500">{checkoutBusy === key ? 'Opening...' : label}</span>
-            </button>
-          ))}
+  const planStatusLabel = billing?.planStatus ? billing.planStatus.replace(/_/g, ' ') : 'inactive';
+  const billingModalTitle = billingModalReason === 'out_of_credits'
+    ? "You're out of credits"
+    : billingModalReason === 'billing'
+      ? 'Manage billing'
+      : billingModalReason === 'topup'
+        ? 'Add credits'
+        : 'Upgrade Resume AI';
+  const paidPlan = billing?.plan === 'pro' || billing?.plan === 'pro_plus';
+  const billingModal = billingModalOpen && (
+    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-900/50 p-4 backdrop-blur-sm">
+      <div className="relative my-auto w-full max-w-3xl rounded-xl bg-white shadow-2xl">
+        <button onClick={() => setBillingModalOpen(false)} className="absolute right-4 top-4 z-10 text-slate-400 hover:text-slate-600">x</button>
+        <div className="max-h-[calc(100vh-2rem)] overflow-y-auto p-5 sm:p-7">
+          <div className="pr-8">
+            <h2 className="text-xl font-bold text-slate-900 sm:text-2xl">{billingModalTitle}</h2>
+            <p className="mt-2 text-sm leading-6 text-slate-600">
+              AI resume edits use credits. Job search, uploads, and manual preview edits stay free.
+            </p>
+          </div>
+
+          <div className="mt-5 grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700 sm:grid-cols-3">
+            <div>
+              <span className="block text-xs font-bold uppercase text-slate-500">Credits</span>
+              <b className="mt-1 block text-lg text-slate-900">{billing?.credits ?? 0}</b>
+            </div>
+            <div>
+              <span className="block text-xs font-bold uppercase text-slate-500">Current plan</span>
+              <b className="mt-1 block text-lg text-slate-900">{planLabel}</b>
+              <span className="capitalize text-xs text-slate-500">{planStatusLabel}</span>
+            </div>
+            <div>
+              <span className="block text-xs font-bold uppercase text-slate-500">Free tailor</span>
+              <b className={`mt-1 block text-lg ${billing?.freeTailorAvailable ? 'text-blue-700' : 'text-slate-900'}`}>
+                {billing?.freeTailorAvailable ? 'Available' : 'Used'}
+              </b>
+            </div>
+          </div>
+
+          {paidPlan && (
+            <div className="mt-4 flex flex-col gap-2 rounded-lg border border-blue-100 bg-blue-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <b className="block text-sm text-slate-900">Subscription controls</b>
+                <span className="text-sm text-slate-600">Update payment details, invoices, or plan status in Stripe.</span>
+              </div>
+              <button onClick={openBillingPortal} disabled={billingPortalBusy || !!checkoutBusy} className="rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-60">
+                {billingPortalBusy ? 'Opening...' : 'Manage subscription'}
+              </button>
+            </div>
+          )}
+
+          <div className="mt-6">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h3 className="text-sm font-bold uppercase text-slate-500">Monthly plans</h3>
+              <span className="text-xs text-slate-500">Credits refresh each month</span>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {[
+                { key: 'pro', name: 'Pro', price: '$19/mo', credits: '30 credits/month' },
+                { key: 'pro_plus', name: 'Pro Plus', price: '$29/mo', credits: '75 credits/month' },
+              ].map(plan => (
+                <button
+                  key={plan.key}
+                  onClick={() => startCheckout('subscription', plan.key)}
+                  disabled={!!checkoutBusy || billingPortalBusy}
+                  className={`rounded-lg border p-4 text-left hover:bg-slate-50 disabled:opacity-60 ${billing?.plan === plan.key ? 'border-blue-300 bg-blue-50' : 'border-slate-200 bg-white'}`}
+                >
+                  <span className="flex items-start justify-between gap-3">
+                    <span>
+                      <b className="block text-base text-slate-900">{plan.name}</b>
+                      <span className="mt-1 block text-sm text-slate-600">{plan.credits}</span>
+                    </span>
+                    <span className="text-right">
+                      <b className="block text-base text-slate-900">{plan.price}</b>
+                      <span className="mt-1 block text-sm font-bold text-blue-700">{checkoutBusy === plan.key ? 'Opening...' : billing?.plan === plan.key ? 'Current' : 'Choose'}</span>
+                    </span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="mt-6">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h3 className="text-sm font-bold uppercase text-slate-500">Top up credits</h3>
+              <span className="text-xs text-slate-500">One-time purchase</span>
+            </div>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+              {[
+                { key: 'credits_5', price: '$5', label: '5 credits' },
+                { key: 'credits_20', price: '$15', label: '20 credits' },
+                { key: 'credits_50', price: '$29', label: '50 credits' },
+              ].map(pkg => (
+                <button key={pkg.key} onClick={() => startCheckout('topup', pkg.key)} disabled={!!checkoutBusy || billingPortalBusy} className="rounded-lg border border-slate-200 p-4 text-left hover:bg-slate-50 disabled:opacity-60">
+                  <span className="flex items-center justify-between gap-3 sm:block">
+                    <b className="block text-base text-slate-900">{pkg.price}</b>
+                    <span className="block text-sm text-slate-600">{checkoutBusy === pkg.key ? 'Opening...' : pkg.label}</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {checkoutError && (
+            <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+              {checkoutError}
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -560,7 +661,7 @@ export default function Home() {
   return (
     <div className="fixed inset-0 flex overflow-hidden bg-[#f7f8fb] text-slate-900">
       {authModal}
-      {paywallModal}
+      {billingModal}
       <input ref={fileRef} type="file" accept=".pdf,.docx" onChange={uploadFile} className="hidden" />
       <aside className="relative z-0 flex h-full w-64 shrink-0 flex-col gap-5 overflow-hidden bg-[#332071] px-4 py-6 text-white">
         <div className="flex items-center gap-3 px-2">
@@ -599,7 +700,7 @@ export default function Home() {
           </div>
           <div className="flex items-center gap-3">
             {userId && billing && (
-              <button onClick={openBillingPortal} className="rounded-md border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-700 shadow-sm hover:bg-slate-50">
+              <button onClick={() => openBillingModal(paidPlan ? 'billing' : 'upgrade')} className="rounded-md border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-700 shadow-sm hover:bg-slate-50">
                 {billing.credits} CREDITS - {planLabel.toUpperCase()}
               </button>
             )}
@@ -621,7 +722,7 @@ export default function Home() {
                   {billing && <p className="mt-1 text-sm text-slate-500">{planLabel} plan - {billing.credits} credits available</p>}
                 </div>
                 <div className="flex items-center gap-2">
-                  {billing && <button onClick={() => setShowPaywall(true)} className="rounded-md border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50">Billing</button>}
+                  {billing && <button onClick={() => openBillingModal(paidPlan ? 'billing' : 'upgrade')} className="rounded-md border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50">Billing</button>}
                   <button onClick={() => fileRef.current?.click()} disabled={uploading} className="rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm hover:bg-blue-700 disabled:opacity-50">+ Upload New PDF/DOCX</button>
                 </div>
               </div>
