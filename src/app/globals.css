@@ -37,27 +37,10 @@ main {
   overflow: hidden;
 }
 
-main > section {
-  overflow: hidden;
-}
-
-/* Workspace left document column and right chat column. */
-main > section > div:first-child,
-main > section > aside {
-  min-height: 0;
-  overflow: hidden;
-}
-
-/* Resume preview body and chat history body become the only scroll regions. */
-main > section > div:first-child > div:last-child,
-main > section > aside > div:nth-child(2) {
+.app-scroll-region {
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
   overscroll-behavior: contain;
-}
-
-/* Keep the right-side composer pinned at the bottom. */
-main > section > aside > div:last-child {
-  flex-shrink: 0;
+  -webkit-overflow-scrolling: touch;
 }

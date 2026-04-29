@@ -694,7 +694,7 @@ export default function Home() {
           </div>
           <button onClick={() => setResumePreviewOpen(false)} className="rounded-md px-3 py-1.5 text-sm font-bold text-slate-500 hover:bg-slate-100">x</button>
         </div>
-        <div className="min-h-0 flex-1 overflow-auto bg-slate-100 p-3 sm:p-5">
+        <div className="app-scroll-region flex-1 bg-slate-100 p-3 sm:p-5">
           <ResumeDocument resume={activeResume} onEdit={handleManualEdit} />
         </div>
       </aside>
@@ -722,7 +722,7 @@ export default function Home() {
         </div>
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <div className="mb-2 px-2 text-xs font-bold text-white/50">CHAT HISTORY</div>
-          <div className="custom-scrollbar min-h-0 flex-1 space-y-1 overflow-y-auto pb-2">
+          <div className="app-scroll-region custom-scrollbar flex-1 space-y-1 pb-2">
             {userId && sessions.map(s => (
               <button key={s.id} title={s.title} onClick={() => loadChat(s.id)} className={`flex w-full items-center gap-3 rounded-lg p-3 text-left text-sm hover:bg-white/10 ${activeSessionId === s.id ? 'bg-white/20 font-bold' : ''}`}>
                 <span>-</span>
@@ -767,7 +767,7 @@ export default function Home() {
                 </div>
               </div>
               {uploading && <p className="mb-4 text-sm text-slate-500">Uploading and parsing with Gemini...</p>}
-              <div className="grid grid-cols-1 gap-3 overflow-y-auto pb-4">
+              <div className="app-scroll-region grid flex-1 grid-cols-1 gap-3 pb-4">
                 {resumesList.length === 0 && !uploading && (
                   <div className="rounded-xl border-2 border-dashed border-slate-200 bg-white p-10 text-center text-slate-500">No resumes uploaded yet. Click the button above to upload one.</div>
                 )}
@@ -800,7 +800,7 @@ export default function Home() {
             </section>
           ) : (
             <section className="flex min-h-0 flex-1 flex-col">
-              <div className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain px-4 py-6">
+              <div className="app-scroll-region flex-1 space-y-5 px-4 py-6">
                 {renderMessages(false)}
               </div>
               <div className="shrink-0 border-t border-slate-200 bg-[#f7f8fb]/95 px-3 py-3 sm:px-5">
@@ -826,7 +826,7 @@ export default function Home() {
                 <button onClick={() => { setActiveResume(null); setResumePreviewOpen(false); setShowDashboard(true); loadResumes(); }} className="rounded-lg px-4 py-2 text-xs font-bold text-slate-500 hover:bg-slate-100">RESUMES</button>
               </div>
             </div>
-            <div className="min-h-0 flex-1 space-y-5 overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-6">
+            <div className="app-scroll-region flex-1 space-y-5 px-4 py-6">
               {renderMessages(false)}
             </div>
             <div className="shrink-0 border-t border-slate-200 bg-[#f7f8fb]/95 px-3 py-3 sm:px-5">
