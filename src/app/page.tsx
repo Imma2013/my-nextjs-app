@@ -84,6 +84,16 @@ function makeIdempotencyKey() {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+async function readJsonResponse(res: Response, fallbackMessage: string) {
+  const text = await res.text();
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(res.ok ? fallbackMessage : `${fallbackMessage}. The server returned a non-JSON error response.`);
+  }
+}
+
 function looksLikePaidResumeRequest(text: string) {
   return /\btailor\b|\btarget\b|\bats\b|\bcover letter\b|\bresume builder\b|\b(optimi[sz]e|rewrite|improve|edit|update)\b.*\bresume\b|\bresume\b.*\b(optimi[sz]e|rewrite|improve|edit|update)\b/i.test(text);
 }
@@ -358,7 +368,7 @@ export default function Home() {
         message: 'message' in edit ? edit.message : undefined,
       }),
     });
-    const data = await res.json();
+    const data = await readJsonResponse(res, 'Resume edit failed');
     if (!res.ok) throw new Error(data.error || 'Resume edit failed');
     if (!data.resume) throw new Error(data.reply || 'Could not map this to a saved resume field');
     setActiveResume(data.resume);

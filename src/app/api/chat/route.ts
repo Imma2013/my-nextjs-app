@@ -14,8 +14,9 @@ import { z } from 'zod';
 import { Composio } from '@composio/core';
 import { VercelProvider } from '@composio/vercel';
 import { searchJobs } from '@/lib/jobs';
-import { inferResumeBillingAction } from '@/lib/billing';
+import { inferResumeBillingAction, PaymentRequiredError } from '@/lib/billing';
 import { createGeminiFallbackMiddleware, GEMINI_MODEL_FALLBACKS, geminiUserError } from '@/lib/gemini';
+import { runResumeEdit } from '@/lib/resumeEdit';
 
 type ChatMessage = UIMessage<{ sessionId?: string }>;
 
@@ -173,31 +174,41 @@ export async function POST(req: NextRequest) {
             ),
         }),
         execute: async ({ resume_id, instruction }) => {
-          const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
           const actionType = inferResumeBillingAction(instruction);
-          const res = await fetch(`${baseUrl}/api/resume-edit`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
+          try {
+            const result = await runResumeEdit({
               resumeId: resume_id,
               userId,
               message: instruction,
               billingAction: actionType,
               idempotencyKey: `${idempotencyKey || generateId()}:edit_resume:${resume_id}`,
-            }),
-          });
-          const data = await res.json();
-          if (res.status === 402) {
+            });
+
+            return {
+              success: Boolean(result.resume),
+              reply: result.reply || 'Resume updated successfully',
+              resume: result.resume,
+              billing: result.billing,
+              processedBy: result.processedBy,
+            };
+          } catch (error) {
+            if (error instanceof PaymentRequiredError) {
+              return {
+                success: false,
+                paymentRequired: true,
+                reply: error.message || 'You need credits to edit this resume with AI.',
+                credits: error.details.credits,
+                cost: error.details.cost,
+                freeTailorAvailable: error.details.freeTailorAvailable,
+              };
+            }
+
+            console.error('edit_resume tool failed:', error);
             return {
               success: false,
-              paymentRequired: true,
-              reply: data.error || 'You need credits to edit this resume with AI.',
-              credits: data.credits,
-              cost: data.cost,
-              freeTailorAvailable: data.freeTailorAvailable,
+              reply: "I couldn't edit the resume. Please try again.",
             };
           }
-          return { success: res.ok, reply: data.reply || 'Resume updated successfully', resume: data.resume, billing: data.billing };
         },
       }),
     };
