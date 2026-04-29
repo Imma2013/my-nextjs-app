@@ -127,6 +127,7 @@ export default function Home() {
   const [checkoutError, setCheckoutError] = useState('');
   const [billingPortalBusy, setBillingPortalBusy] = useState(false);
   const [resumePreviewOpen, setResumePreviewOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
 
   const {
     messages,
@@ -162,6 +163,9 @@ export default function Home() {
   const busy = chatStatus === 'submitted' || chatStatus === 'streaming';
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.innerWidth < 768) setSidebarOpen(false);
+  }, []);
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async user => {
       if (user) {
@@ -240,6 +244,10 @@ export default function Home() {
     setBillingModalOpen(true);
   }
 
+  function closeSidebarOnMobile() {
+    if (typeof window !== 'undefined' && window.innerWidth < 768) setSidebarOpen(false);
+  }
+
   async function startCheckout(checkoutType: 'subscription' | 'topup', value: string) {
     if (!userId) {
       setShowAuthModal(true);
@@ -313,6 +321,7 @@ export default function Home() {
       setResumePreviewOpen(false);
       setMessages((data.messages || []).map(savedMessageToUIMessage));
       setShowDashboard(false);
+      closeSidebarOnMobile();
     }
   }
 
@@ -323,6 +332,7 @@ export default function Home() {
     setMessages([]);
     setInput('');
     setShowDashboard(false);
+    closeSidebarOnMobile();
   }
 
   async function uploadFile(e: ChangeEvent<HTMLInputElement>) {
@@ -505,14 +515,14 @@ export default function Home() {
     return (
       <>
         {messages.map((m: ChatMessage, i: number) => (
-          <div key={m.id || i} className={m.role === 'user' ? 'rounded-xl bg-slate-100 p-3' : 'leading-7'}>
-            <div className={`whitespace-pre-wrap break-words ${compact ? '' : 'max-w-3xl mx-auto'}`}>
+          <div key={m.id || i} className={m.role === 'user' ? 'mx-auto flex w-full max-w-3xl justify-end' : 'mx-auto w-full max-w-3xl leading-7'}>
+            <div className={`whitespace-pre-wrap break-words ${m.role === 'user' ? 'max-w-[82%] rounded-2xl bg-slate-100 px-4 py-2.5' : ''} ${compact ? '' : ''}`}>
               {renderMessageParts(m)}
             </div>
           </div>
         ))}
-        {busy && <div className={`text-sm text-slate-500 ${compact ? '' : 'max-w-3xl mx-auto'}`}>Working...</div>}
-        {chatError && <div className={`text-sm text-red-500 ${compact ? '' : 'max-w-3xl mx-auto'}`}>{chatError.message}</div>}
+        {busy && <div className={`text-sm text-slate-500 ${compact ? '' : 'mx-auto max-w-3xl'}`}>Working...</div>}
+        {chatError && <div className={`text-sm text-red-500 ${compact ? '' : 'mx-auto max-w-3xl'}`}>{chatError.message}</div>}
         <div ref={bottomRef} />
       </>
     );
@@ -656,26 +666,38 @@ export default function Home() {
   );
 
   const composer = (
-    <div className="relative z-10 shrink-0 rounded-xl border-2 border-blue-500 bg-white p-4 shadow-sm">
-      {userId && billing && (
-        <div className="mb-2 flex items-center justify-between text-xs text-slate-500">
-          <span>{billing.credits} credits - {planLabel}</span>
-          <span className="font-semibold text-blue-700">{billing.freeTailorAvailable ? 'Free tailor available' : 'AI resume edits cost 1 credit'}</span>
-        </div>
-      )}
+    <div className="relative z-10 mx-auto w-full max-w-3xl rounded-2xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
       <textarea
         value={input}
         onChange={e => setInput(e.target.value)}
         onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
-        rows={activeResume ? 3 : 5}
+        rows={1}
         placeholder="Ask for resume edits, career advice, or job searches..."
-        className="block w-full resize-none bg-transparent text-sm text-slate-900 outline-none placeholder:text-slate-400"
+        className="block max-h-32 min-h-8 w-full resize-none bg-transparent px-1 py-1.5 text-sm leading-6 text-slate-900 outline-none placeholder:text-slate-400"
         disabled={uploading || busy}
       />
-      <div className="mt-3 flex items-center justify-between">
-        <button onClick={() => fileRef.current?.click()} disabled={uploading} className="rounded-full bg-slate-100 px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-200 disabled:opacity-50">+ Attach a Resume</button>
-        <button onClick={() => sendMessage()} disabled={!input.trim() || busy || uploading} className="flex h-9 w-12 items-center justify-center rounded-full bg-blue-600 text-xs font-bold text-white disabled:bg-slate-200 disabled:text-slate-400">SEND</button>
+      <div className="flex items-center justify-between gap-3">
+        <button onClick={() => fileRef.current?.click()} disabled={uploading} className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-200 disabled:opacity-50">Attach</button>
+        <button onClick={() => sendMessage()} disabled={!input.trim() || busy || uploading} className="flex h-8 min-w-14 items-center justify-center rounded-full bg-blue-600 px-3 text-xs font-bold text-white disabled:bg-slate-200 disabled:text-slate-400">Send</button>
       </div>
+    </div>
+  );
+
+  const previewSheet = resumePreviewOpen && activeResume && (
+    <div className="fixed inset-0 z-40 flex justify-end bg-slate-900/30">
+      <button aria-label="Close resume preview" onClick={() => setResumePreviewOpen(false)} className="absolute inset-0 cursor-default" />
+      <aside className="relative z-10 flex h-full w-full flex-col bg-white shadow-2xl md:w-[52vw] md:max-w-[720px]">
+        <div className="flex h-14 shrink-0 items-center justify-between border-b border-slate-200 px-4">
+          <div className="min-w-0">
+            <b className="block truncate text-sm text-slate-900">Resume Preview</b>
+            <span className="text-xs text-slate-500">Click text to edit manually</span>
+          </div>
+          <button onClick={() => setResumePreviewOpen(false)} className="rounded-md px-3 py-1.5 text-sm font-bold text-slate-500 hover:bg-slate-100">x</button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-auto bg-slate-100 p-3 sm:p-5">
+          <ResumeDocument resume={activeResume} onEdit={handleManualEdit} />
+        </div>
+      </aside>
     </div>
   );
 
@@ -683,15 +705,20 @@ export default function Home() {
     <div className="fixed inset-0 flex overflow-hidden bg-[#f7f8fb] text-slate-900">
       {authModal}
       {billingModal}
+      {previewSheet}
       <input ref={fileRef} type="file" accept=".pdf,.docx" onChange={uploadFile} className="hidden" />
-      <aside className="relative z-0 flex h-full w-64 shrink-0 flex-col gap-5 overflow-hidden bg-[#332071] px-4 py-6 text-white">
-        <div className="flex items-center gap-3 px-2">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-fuchsia-500 font-bold">R</div>
-          <span className="text-lg font-bold">Resume AI</span>
+      {sidebarOpen && <button aria-label="Close sidebar" onClick={() => setSidebarOpen(false)} className="fixed inset-0 z-30 bg-slate-900/30 md:hidden" />}
+      <aside className={`fixed inset-y-0 left-0 z-40 flex w-72 shrink-0 flex-col gap-4 overflow-hidden bg-[#332071] px-4 py-4 text-white shadow-2xl transition-transform duration-200 md:static md:w-64 md:shadow-none ${sidebarOpen ? 'translate-x-0' : '-translate-x-full md:hidden'}`}>
+        <div className="flex items-center justify-between gap-3 px-1">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-fuchsia-500 font-bold">R</div>
+            <span className="truncate text-base font-bold">Resume AI</span>
+          </div>
+          <button onClick={() => setSidebarOpen(false)} className="rounded-md px-2 py-1 text-sm font-bold text-white/70 hover:bg-white/10 hover:text-white">x</button>
         </div>
         <div className="flex flex-col gap-2">
           <button onClick={newChat} className="flex items-center gap-3 rounded-lg bg-white/15 p-3 text-sm font-bold hover:bg-white/25"><span>+</span> New Chat</button>
-          <button onClick={() => { if (!userId) { setShowAuthModal(true); return; } setShowDashboard(true); setActiveResume(null); setResumePreviewOpen(false); loadResumes(); }} className={`flex items-center gap-3 rounded-lg p-3 text-sm hover:bg-white/10 ${showDashboard ? 'bg-white/20 font-bold' : ''}`}><span>[]</span> Resumes / CVs</button>
+          <button onClick={() => { if (!userId) { setShowAuthModal(true); closeSidebarOnMobile(); return; } setShowDashboard(true); setActiveResume(null); setResumePreviewOpen(false); loadResumes(); closeSidebarOnMobile(); }} className={`flex items-center gap-3 rounded-lg p-3 text-sm hover:bg-white/10 ${showDashboard ? 'bg-white/20 font-bold' : ''}`}><span>[]</span> Resumes / CVs</button>
         </div>
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <div className="mb-2 px-2 text-xs font-bold text-white/50">CHAT HISTORY</div>
@@ -714,52 +741,44 @@ export default function Home() {
           </div>
         )}
       </aside>
-      <main className="relative z-0 flex h-full min-h-0 min-w-0 flex-1 flex-col gap-4 overflow-hidden p-6">
-        <div className="flex shrink-0 items-center justify-between">
-          <div className="flex items-center gap-2">
-            {userId && <button onClick={() => loadSessions()} className="rounded-md border border-slate-200 bg-white px-4 py-2 text-xs font-bold shadow-sm">RECENT CHATS</button>}
-          </div>
-          <div className="flex items-center gap-3">
-            {userId && billing && (
-              <button onClick={() => openBillingModal(paidPlan ? 'billing' : 'upgrade')} className="rounded-md border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-700 shadow-sm hover:bg-slate-50">
-                {billing.credits} CREDITS - {planLabel.toUpperCase()}
-              </button>
-            )}
-            <button onClick={newChat} className="rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-xs font-bold text-blue-700 hover:bg-blue-100">+ NEW CHAT</button>
-            {!userId ? (
-              <button onClick={() => setShowAuthModal(true)} className="rounded-md bg-blue-600 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-blue-700">SIGN IN</button>
-            ) : (
-              <button onClick={() => signOut(auth)} className="rounded-md bg-slate-200 px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-300">SIGN OUT</button>
-            )}
-          </div>
-        </div>
+      <main className="relative z-0 flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <header className="flex h-14 shrink-0 items-center justify-between border-b border-slate-200 bg-[#f7f8fb]/95 px-3 sm:px-5">
+          <button onClick={() => setSidebarOpen(open => !open)} className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 shadow-sm hover:bg-slate-50">
+            {sidebarOpen ? 'Close' : 'Menu'}
+          </button>
+          {!userId ? (
+            <button onClick={() => setShowAuthModal(true)} className="rounded-md bg-blue-600 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-blue-700">SIGN IN</button>
+          ) : (
+            <button onClick={() => signOut(auth)} className="rounded-md bg-slate-200 px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-300">SIGN OUT</button>
+          )}
+        </header>
 
         {!activeResume ? (
           showDashboard ? (
-            <section className="mx-auto my-4 flex min-h-0 w-full max-w-5xl flex-1 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white p-8 shadow-sm">
-              <div className="mb-8 flex items-center justify-between">
+            <section className="mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col overflow-hidden px-4 py-6 sm:px-6">
+              <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <h2 className="text-2xl font-bold text-slate-900">My Resumes / CVs</h2>
                   {billing && <p className="mt-1 text-sm text-slate-500">{planLabel} plan - {billing.credits} credits available</p>}
                 </div>
                 <div className="flex items-center gap-2">
                   {billing && <button onClick={() => openBillingModal(paidPlan ? 'billing' : 'upgrade')} className="rounded-md border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50">Billing</button>}
-                  <button onClick={() => fileRef.current?.click()} disabled={uploading} className="rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm hover:bg-blue-700 disabled:opacity-50">+ Upload New PDF/DOCX</button>
+                  <button onClick={() => fileRef.current?.click()} disabled={uploading} className="rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm hover:bg-blue-700 disabled:opacity-50">Upload PDF/DOCX</button>
                 </div>
               </div>
               {uploading && <p className="mb-4 text-sm text-slate-500">Uploading and parsing with Gemini...</p>}
-              <div className="grid grid-cols-1 gap-4 overflow-y-auto pb-4">
+              <div className="grid grid-cols-1 gap-3 overflow-y-auto pb-4">
                 {resumesList.length === 0 && !uploading && (
-                  <div className="rounded-xl border-2 border-dashed border-slate-200 p-12 text-center text-slate-500">No resumes uploaded yet. Click the button above to upload one.</div>
+                  <div className="rounded-xl border-2 border-dashed border-slate-200 bg-white p-10 text-center text-slate-500">No resumes uploaded yet. Click the button above to upload one.</div>
                 )}
                 {resumesList.map(r => (
-                  <div key={r.id} className="flex items-center justify-between rounded-xl border border-slate-200 p-4 hover:bg-slate-50">
-                    <div>
-                      <h3 className="font-bold text-slate-900">{r.title || r.file_name}</h3>
+                  <div key={r.id} className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-white p-4 hover:bg-slate-50 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0">
+                      <h3 className="truncate font-bold text-slate-900">{r.title || r.file_name}</h3>
                       <p className="text-xs text-slate-500">Uploaded on {new Date(r.created_at).toLocaleDateString()}</p>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <button onClick={() => { setActiveResume(r); setResumePreviewOpen(false); setShowDashboard(false); setMessages(prev => [...prev, makeTextMessage('assistant', 'Resume loaded. Ask me to edit it, search jobs, or click directly in the preview to edit manually.')]); }} className="rounded-md bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-200">Select for Chat</button>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <button onClick={() => { setActiveResume(r); setResumePreviewOpen(false); setShowDashboard(false); setMessages(prev => [...prev, makeTextMessage('assistant', 'Resume loaded. Ask me to edit it, search jobs, or open the preview to edit manually.')]); }} className="rounded-md bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-200">Select</button>
                       <button onClick={() => deleteResume(r.id)} className="rounded-md bg-red-50 px-3 py-1.5 text-xs font-bold text-red-600 hover:bg-red-100">Delete</button>
                     </div>
                   </div>
@@ -767,37 +786,32 @@ export default function Home() {
               </div>
             </section>
           ) : messages.length === 0 ? (
-            <section className="flex min-h-0 flex-1 items-center justify-center overflow-hidden">
+            <section className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden px-4">
               <div className="w-full max-w-3xl">
-                <h1 className="mb-5 text-center text-xl font-bold">How can AI Resume Agent help with your resume and job search?</h1>
-                <div className="mb-8 flex justify-center gap-3">
-                  <button onClick={() => setInput('Find frontend jobs in Atlanta.')} className="rounded-md border bg-white px-4 py-2 text-xs font-bold shadow-sm hover:bg-slate-50">FIND JOBS</button>
-                  <button onClick={() => setInput('Help me target my resume for a role.')} className="rounded-md border bg-white px-4 py-2 text-xs font-bold shadow-sm hover:bg-slate-50">TARGET MY RESUME</button>
-                  <button onClick={() => setInput('Improve my resume score.')} className="rounded-md border bg-white px-4 py-2 text-xs font-bold shadow-sm hover:bg-slate-50">IMPROVE MY SCORE</button>
+                <h1 className="mb-5 text-center text-xl font-bold">How can AI Resume Agent help?</h1>
+                <div className="mb-5 flex flex-wrap justify-center gap-2">
+                  <button onClick={() => setInput('Find frontend jobs in Atlanta.')} className="rounded-md border bg-white px-3 py-2 text-xs font-bold shadow-sm hover:bg-slate-50">Find jobs</button>
+                  <button onClick={() => setInput('Help me target my resume for a role.')} className="rounded-md border bg-white px-3 py-2 text-xs font-bold shadow-sm hover:bg-slate-50">Target resume</button>
+                  <button onClick={() => setInput('Improve my resume score.')} className="rounded-md border bg-white px-3 py-2 text-xs font-bold shadow-sm hover:bg-slate-50">Improve score</button>
                 </div>
                 {composer}
                 {uploading && <p className="mt-3 text-center text-xs text-slate-500">Parsing and saving resume context with Gemini...</p>}
               </div>
             </section>
           ) : (
-            <section className="mx-auto my-4 flex min-h-0 w-full max-w-5xl flex-1 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-              <div className="flex h-14 shrink-0 items-center justify-between border-b border-slate-200 px-5">
-                <b className="text-sm">AI Chat</b>
-              </div>
-              <div className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain p-5">
+            <section className="flex min-h-0 flex-1 flex-col">
+              <div className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain px-4 py-6">
                 {renderMessages(false)}
               </div>
-              <div className="shrink-0 border-t border-slate-200 p-5">
-                <div className="mx-auto max-w-3xl">
-                  {uploading && <p className="mb-2 text-xs text-slate-500">Parsing with Gemini...</p>}
-                  {composer}
-                </div>
+              <div className="shrink-0 border-t border-slate-200 bg-[#f7f8fb]/95 px-3 py-3 sm:px-5">
+                {uploading && <p className="mx-auto mb-2 max-w-3xl text-xs text-slate-500">Parsing with Gemini...</p>}
+                {composer}
               </div>
             </section>
           )
         ) : (
-          <section className="mx-auto my-4 flex min-h-0 w-full max-w-6xl flex-1 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-            <div className="flex shrink-0 flex-col gap-3 border-b border-slate-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+          <section className="flex min-h-0 flex-1 flex-col">
+            <div className="flex shrink-0 flex-col gap-3 border-b border-slate-200 bg-[#f7f8fb]/95 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
               <div className="min-w-0">
                 <b className="block truncate text-sm text-slate-900">{activeResume.title || activeResume.file_name || 'Active resume'}</b>
                 <span className="text-xs text-slate-500">Chat, tailor, or open the preview to edit manually</span>
@@ -805,32 +819,19 @@ export default function Home() {
               <div className="flex shrink-0 flex-wrap gap-2">
                 <button
                   onClick={() => setResumePreviewOpen(open => !open)}
-                  className={`rounded-lg px-4 py-2 text-xs font-bold ${resumePreviewOpen ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}
+                  className={`rounded-lg px-4 py-2 text-xs font-bold ${resumePreviewOpen ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-white text-slate-700 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50'}`}
                 >
                   {resumePreviewOpen ? 'Hide Preview' : 'Resume Preview'}
                 </button>
-                <button onClick={() => { setActiveResume(null); setResumePreviewOpen(false); setShowDashboard(true); loadResumes(); }} className="rounded-lg px-4 py-2 text-xs font-bold text-slate-500 hover:bg-slate-50">RESUMES</button>
+                <button onClick={() => { setActiveResume(null); setResumePreviewOpen(false); setShowDashboard(true); loadResumes(); }} className="rounded-lg px-4 py-2 text-xs font-bold text-slate-500 hover:bg-slate-100">RESUMES</button>
               </div>
             </div>
-            <div className="min-h-0 flex-1 space-y-5 overflow-y-auto overflow-x-hidden overscroll-contain p-4 sm:p-5">
+            <div className="min-h-0 flex-1 space-y-5 overflow-y-auto overflow-x-hidden overscroll-contain px-4 py-6">
               {renderMessages(false)}
             </div>
-            {resumePreviewOpen && (
-              <div className="shrink-0 border-t border-slate-200 bg-slate-100">
-                <div className="flex h-12 items-center justify-between px-4 sm:px-5">
-                  <b className="text-sm text-slate-900">Resume Preview</b>
-                  <span className="text-xs text-slate-500">Click text to edit manually</span>
-                </div>
-                <div className="max-h-[52vh] overflow-x-auto overflow-y-auto p-3 overscroll-contain sm:p-5">
-                  <ResumeDocument resume={activeResume} onEdit={handleManualEdit} />
-                </div>
-              </div>
-            )}
-            <div className="shrink-0 border-t border-slate-200 p-4 sm:p-5">
-              <div className="mx-auto max-w-3xl">
-                {uploading && <p className="mb-2 text-xs text-slate-500">Parsing with Gemini...</p>}
-                {composer}
-              </div>
+            <div className="shrink-0 border-t border-slate-200 bg-[#f7f8fb]/95 px-3 py-3 sm:px-5">
+              {uploading && <p className="mx-auto mb-2 max-w-3xl text-xs text-slate-500">Parsing with Gemini...</p>}
+              {composer}
             </div>
           </section>
         )}
