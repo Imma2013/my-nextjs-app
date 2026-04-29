@@ -684,7 +684,7 @@ export default function Home() {
   );
 
   const previewSheet = resumePreviewOpen && activeResume && (
-    <div className="fixed inset-0 z-40 flex justify-end bg-slate-900/30">
+    <div className="fixed inset-0 z-40 flex justify-end bg-slate-900/30 lg:hidden">
       <button aria-label="Close resume preview" onClick={() => setResumePreviewOpen(false)} className="absolute inset-0 cursor-default" />
       <aside className="relative z-10 flex h-full w-full flex-col bg-white shadow-2xl md:w-[52vw] md:max-w-[720px]">
         <div className="flex h-14 shrink-0 items-center justify-between border-b border-slate-200 px-4">
@@ -699,6 +699,21 @@ export default function Home() {
         </div>
       </aside>
     </div>
+  );
+
+  const dockedPreviewPane = resumePreviewOpen && activeResume && (
+    <aside className="hidden min-h-0 w-[min(42vw,520px)] min-w-[400px] shrink-0 flex-col border-l border-slate-200 bg-white shadow-[-10px_0_24px_rgba(15,23,42,0.06)] lg:flex">
+      <div className="flex h-14 shrink-0 items-center justify-between border-b border-slate-200 px-4">
+        <div className="min-w-0">
+          <b className="block truncate text-sm text-slate-900">Resume Preview</b>
+          <span className="text-xs text-slate-500">Click text to edit manually</span>
+        </div>
+        <button onClick={() => setResumePreviewOpen(false)} className="rounded-md px-3 py-1.5 text-sm font-bold text-slate-500 hover:bg-slate-100">x</button>
+      </div>
+      <div className="app-scroll-region flex-1 bg-slate-100 p-4">
+        <ResumeDocument resume={activeResume} onEdit={handleManualEdit} />
+      </div>
+    </aside>
   );
 
   return (
@@ -810,7 +825,7 @@ export default function Home() {
             </section>
           )
         ) : (
-          <section className="flex min-h-0 flex-1 flex-col">
+          <section className="flex min-h-0 flex-1 flex-col overflow-hidden">
             <div className="flex shrink-0 flex-col gap-3 border-b border-slate-200 bg-[#f7f8fb]/95 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
               <div className="min-w-0">
                 <b className="block truncate text-sm text-slate-900">{activeResume.title || activeResume.file_name || 'Active resume'}</b>
@@ -826,12 +841,17 @@ export default function Home() {
                 <button onClick={() => { setActiveResume(null); setResumePreviewOpen(false); setShowDashboard(true); loadResumes(); }} className="rounded-lg px-4 py-2 text-xs font-bold text-slate-500 hover:bg-slate-100">RESUMES</button>
               </div>
             </div>
-            <div className="app-scroll-region flex-1 space-y-5 px-4 py-6">
-              {renderMessages(false)}
-            </div>
-            <div className="shrink-0 border-t border-slate-200 bg-[#f7f8fb]/95 px-3 py-3 sm:px-5">
-              {uploading && <p className="mx-auto mb-2 max-w-3xl text-xs text-slate-500">Parsing with Gemini...</p>}
-              {composer}
+            <div className="flex min-h-0 flex-1 overflow-hidden">
+              <div className="flex min-w-0 flex-1 flex-col">
+                <div className="app-scroll-region flex-1 space-y-5 px-4 py-6">
+                  {renderMessages(false)}
+                </div>
+                <div className="shrink-0 border-t border-slate-200 bg-[#f7f8fb]/95 px-3 py-3 sm:px-5">
+                  {uploading && <p className="mx-auto mb-2 max-w-3xl text-xs text-slate-500">Parsing with Gemini...</p>}
+                  {composer}
+                </div>
+              </div>
+              {dockedPreviewPane}
             </div>
           </section>
         )}
