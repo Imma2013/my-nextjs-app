@@ -8,6 +8,7 @@ import {
 } from '@/lib/billing';
 import { generateGeminiContent, geminiUserError } from '@/lib/gemini';
 import { RESUME_FACT_SAFETY_RULES } from '@/lib/resumeFacts';
+import { auditTailoredResume } from '@/lib/resumeTailorAudit';
 
 type TailorJob = {
   title?: string;
@@ -509,7 +510,7 @@ export async function POST(req: NextRequest) {
     await assertCanRunPaidAction({ userId, actionType, cost, idempotencyKey: chargeKey });
 
     const tailored = await tailorWithGemini({ parsed: sourceParsed, job, answers: normalizedAnswers });
-    const { parsed: tailoredParsed, usedSourceFallback } = normalizeResumeJson(
+    const { parsed: normalizedTailoredParsed, usedSourceFallback } = normalizeResumeJson(
       sourceParsed,
       tailored.tailoredResume && typeof tailored.tailoredResume === 'object' ? tailored.tailoredResume : sourceParsed,
     );
@@ -517,10 +518,20 @@ export async function POST(req: NextRequest) {
     const role = cleanTitle(job.title || 'Tailored Resume');
     const company = cleanTitle(job.company_name || '');
     const tailoredTitle = `${role}${company ? ` - ${company}` : ''} Tailored`;
+    const fallbackSummary = `Tailored for ${role}${company ? ` at ${company}` : ''}.`;
+    const audited = auditTailoredResume({
+      sourceParsed,
+      tailoredParsed: normalizedTailoredParsed,
+      job,
+      answers: normalizedAnswers,
+      gemini: tailored,
+      fallbackSummary: usedSourceFallback
+        ? `Created a safe tailored copy for ${role}${company ? ` at ${company}` : ''}; unsupported claims were left out.`
+        : fallbackSummary,
+    });
+    const tailoredParsed = audited.parsed;
     const content = JSON.stringify(tailoredParsed);
-    const summary = usedSourceFallback
-      ? `Created a safe tailored copy for ${role}${company ? ` at ${company}` : ''}; unsupported claims were left out.`
-      : tailored.summary || `Tailored for ${role}${company ? ` at ${company}` : ''}.`;
+    const summary = audited.summary;
 
     const { data: savedResume, error: saveError } = await supabase
       .from('resumes')
@@ -551,11 +562,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       needsClarification: false,
       resume: savedResume,
-      score: Math.max(0, Math.min(100, Number(tailored.score || 0))),
+      score: audited.score,
       summary,
-      improvements: Array.isArray(tailored.improvements) ? tailored.improvements : [],
-      matchedKeywords: Array.isArray(tailored.matchedKeywords) ? tailored.matchedKeywords : [],
-      missingKeywords: Array.isArray(tailored.missingKeywords) ? tailored.missingKeywords : [],
+      improvements: audited.improvements,
+      matchedKeywords: audited.matchedKeywords,
+      missingKeywords: audited.missingKeywords,
       downloadUrl: `/api/resumes/${encodeURIComponent(savedResume.id)}/download?userId=${encodeURIComponent(userId)}`,
       billing,
       processedBy: tailored.model,
