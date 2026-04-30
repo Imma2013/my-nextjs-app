@@ -15,6 +15,7 @@ type ChatMessage = UIMessage<{ sessionId?: string }>;
 type ResumeContext = { id: string; title?: string; file_name?: string; summary?: string; candidate_name?: string; headline?: string; preview_url?: string; parsed_json?: any };
 type ChatSession = { id: string; title: string; resumes?: ResumeContext | null };
 type EditPayload = { operation: 'replace' | 'add' | 'remove'; path: string; value?: unknown };
+type AppView = 'chat' | 'resumes' | 'apps';
 type BillingSummary = {
   credits: number;
   plan: string;
@@ -23,6 +24,13 @@ type BillingSummary = {
   freeTailorAvailable: boolean;
 };
 type BillingModalReason = 'out_of_credits' | 'upgrade' | 'topup' | 'billing';
+type ToolkitConnection = {
+  slug: string;
+  name: string;
+  logo?: string;
+  isConnected: boolean;
+  connectedAccountId?: string;
+};
 
 function makeTextMessage(role: 'user' | 'assistant', text: string): ChatMessage {
   return {
@@ -118,8 +126,12 @@ export default function Home() {
   const [authError, setAuthError] = useState('');
   const [isLogin, setIsLogin] = useState(true);
   const [showAuthModal, setShowAuthModal] = useState(false);
-  const [showDashboard, setShowDashboard] = useState(false);
+  const [activeView, setActiveView] = useState<AppView>('chat');
   const [resumesList, setResumesList] = useState<any[]>([]);
+  const [toolkits, setToolkits] = useState<ToolkitConnection[]>([]);
+  const [connectionsLoading, setConnectionsLoading] = useState(false);
+  const [connectionsError, setConnectionsError] = useState('');
+  const [connectionBusy, setConnectionBusy] = useState('');
   const [billing, setBilling] = useState<BillingSummary | null>(null);
   const [billingModalOpen, setBillingModalOpen] = useState(false);
   const [billingModalReason, setBillingModalReason] = useState<BillingModalReason>('upgrade');
@@ -179,6 +191,17 @@ export default function Home() {
   }, []);
   useEffect(() => { if (userId) { loadSessions(userId); loadResumes(userId); loadBilling(userId); } else { setBilling(null); } }, [userId]);
   useEffect(() => {
+    if (!userId || typeof window === 'undefined') return;
+    if (new URLSearchParams(window.location.search).get('view') !== 'apps') return;
+    setActiveView('apps');
+    setActiveResume(null);
+    setResumePreviewOpen(false);
+    void loadConnections(userId);
+  }, [userId]);
+  useEffect(() => {
+    if (userId && activeView === 'apps') void loadConnections(userId);
+  }, [userId, activeView]);
+  useEffect(() => {
     if (!userId || !billing || resumedCheckoutRef.current || typeof window === 'undefined') return;
     if (!window.location.search.includes('checkout=success')) return;
     const raw = window.localStorage.getItem('pendingTailorResume');
@@ -190,7 +213,7 @@ export default function Home() {
       window.localStorage.removeItem('pendingTailorResume');
       setActiveResume(pending.resume);
       setResumePreviewOpen(false);
-      setShowDashboard(false);
+      setActiveView('chat');
       setInput('');
       void sendChatMessage(
         { text: pending.instruction },
@@ -232,6 +255,22 @@ export default function Home() {
     if (res.ok) setBilling(data);
   }
 
+  async function loadConnections(uid = userId) {
+    if (!uid) return;
+    setConnectionsLoading(true);
+    setConnectionsError('');
+    try {
+      const res = await fetch(`/api/connections?userId=${encodeURIComponent(uid)}`, { cache: 'no-store' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Could not load app connections');
+      setToolkits(data.toolkits || []);
+    } catch (err) {
+      setConnectionsError(err instanceof Error ? err.message : 'Could not load app connections');
+    } finally {
+      setConnectionsLoading(false);
+    }
+  }
+
   function hasCreditsForResumeAction(text: string) {
     if (!billing) return false;
     if (looksLikeTailorRequest(text) && billing.freeTailorAvailable) return true;
@@ -246,6 +285,74 @@ export default function Home() {
 
   function closeSidebarOnMobile() {
     if (typeof window !== 'undefined' && window.innerWidth < 768) setSidebarOpen(false);
+  }
+
+  function openResumesDashboard() {
+    if (!userId) {
+      setShowAuthModal(true);
+      closeSidebarOnMobile();
+      return;
+    }
+    setActiveView('resumes');
+    setActiveResume(null);
+    setResumePreviewOpen(false);
+    loadResumes();
+    closeSidebarOnMobile();
+  }
+
+  function openAppsDashboard() {
+    if (!userId) {
+      setShowAuthModal(true);
+      closeSidebarOnMobile();
+      return;
+    }
+    setActiveView('apps');
+    setActiveResume(null);
+    setResumePreviewOpen(false);
+    void loadConnections();
+    closeSidebarOnMobile();
+  }
+
+  async function connectToolkit(slug: string) {
+    if (!userId) {
+      setShowAuthModal(true);
+      return;
+    }
+    setConnectionBusy(slug);
+    setConnectionsError('');
+    try {
+      const res = await fetch('/api/connections', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, toolkit: slug }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Could not start app connection');
+      if (!data.redirectUrl) throw new Error('Composio did not return a connection URL');
+      window.location.href = data.redirectUrl;
+    } catch (err) {
+      setConnectionsError(err instanceof Error ? err.message : 'Could not start app connection');
+      setConnectionBusy('');
+    }
+  }
+
+  async function disconnectToolkit(connectedAccountId: string) {
+    setConnectionBusy(connectedAccountId);
+    setConnectionsError('');
+    try {
+      const res = await fetch('/api/connections/disconnect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ connectedAccountId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Could not disconnect app');
+      await loadConnections();
+    } catch (err) {
+      setConnectionsError(err instanceof Error ? err.message : 'Could not disconnect app');
+    } finally {
+      setConnectionBusy('');
+    }
   }
 
   async function startCheckout(checkoutType: 'subscription' | 'topup', value: string) {
@@ -320,7 +427,7 @@ export default function Home() {
       setActiveResume(data.session?.resumes || null);
       setResumePreviewOpen(false);
       setMessages((data.messages || []).map(savedMessageToUIMessage));
-      setShowDashboard(false);
+      setActiveView('chat');
       closeSidebarOnMobile();
     }
   }
@@ -331,7 +438,7 @@ export default function Home() {
     setResumePreviewOpen(false);
     setMessages([]);
     setInput('');
-    setShowDashboard(false);
+    setActiveView('chat');
     closeSidebarOnMobile();
   }
 
@@ -356,7 +463,7 @@ export default function Home() {
       if (data.sessionId) setActiveSessionId(data.sessionId);
       await loadSessions();
       await loadResumes();
-      setShowDashboard(false);
+      setActiveView('chat');
       setMessages(prev => [...prev, makeTextMessage('assistant', 'Resume uploaded and converted into editable structured data. Ask me to edit it, or click directly in the preview to edit manually.')]);
     } catch (err) {
       setMessages(prev => [...prev, makeTextMessage('assistant', 'Upload failed: ' + (err instanceof Error ? err.message : 'Unknown error'))]);
@@ -407,7 +514,7 @@ export default function Home() {
       return;
     }
     setInput('');
-    setShowDashboard(false);
+    setActiveView('chat');
     try {
       await sendChatMessage(
         { text: msg },
@@ -428,7 +535,7 @@ export default function Home() {
         setShowAuthModal(true);
         return;
       }
-      setShowDashboard(true);
+      setActiveView('resumes');
       setMessages(prev => [
         ...prev,
         makeTextMessage('assistant', 'Select or upload a resume first, then I can tailor it to this job.'),
@@ -665,6 +772,75 @@ export default function Home() {
     </div>
   );
 
+  const connectionsDashboard = (
+    <section className="mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col overflow-hidden px-4 py-6 sm:px-6">
+      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 className="text-2xl font-bold text-slate-900">App Connections</h2>
+          <p className="mt-1 text-sm text-slate-500">Connect apps so your agent can use them when you ask.</p>
+        </div>
+        <button onClick={() => loadConnections()} disabled={connectionsLoading} className="w-fit rounded-md border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-60">
+          {connectionsLoading ? 'Refreshing...' : 'Refresh'}
+        </button>
+      </div>
+
+      {connectionsError && (
+        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+          {connectionsError}
+        </div>
+      )}
+
+      <div className="app-scroll-region grid flex-1 grid-cols-1 gap-3 pb-4 sm:grid-cols-2 xl:grid-cols-3">
+        {connectionsLoading && toolkits.length === 0 && (
+          <div className="rounded-lg border border-slate-200 bg-white p-4 text-sm text-slate-500">Loading app connections...</div>
+        )}
+        {!connectionsLoading && toolkits.length === 0 && !connectionsError && (
+          <div className="rounded-xl border-2 border-dashed border-slate-200 bg-white p-10 text-center text-slate-500 sm:col-span-2 xl:col-span-3">No app connections are available right now.</div>
+        )}
+        {toolkits.map(toolkit => {
+          const busyKey = toolkit.isConnected ? toolkit.connectedAccountId : toolkit.slug;
+          const busy = Boolean(busyKey && connectionBusy === busyKey);
+          return (
+            <div key={toolkit.slug} className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="flex min-w-0 items-center gap-3">
+                {toolkit.logo ? (
+                  <img src={toolkit.logo} alt={toolkit.name} className="h-9 w-9 shrink-0 rounded-md border border-slate-100 object-contain" />
+                ) : (
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-slate-100 text-sm font-bold text-slate-500">
+                    {toolkit.name.slice(0, 1).toUpperCase()}
+                  </div>
+                )}
+                <div className="min-w-0">
+                  <p className="truncate font-bold text-slate-900">{toolkit.name}</p>
+                  <p className={`text-xs font-semibold ${toolkit.isConnected ? 'text-green-600' : 'text-slate-400'}`}>
+                    {toolkit.isConnected ? 'Connected' : 'Not connected'}
+                  </p>
+                </div>
+              </div>
+              {toolkit.isConnected ? (
+                <button
+                  onClick={() => toolkit.connectedAccountId && disconnectToolkit(toolkit.connectedAccountId)}
+                  disabled={!toolkit.connectedAccountId || busy}
+                  className="shrink-0 rounded-md border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                >
+                  {busy ? 'Removing...' : 'Disconnect'}
+                </button>
+              ) : (
+                <button
+                  onClick={() => connectToolkit(toolkit.slug)}
+                  disabled={busy}
+                  className="shrink-0 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-blue-700 disabled:opacity-60"
+                >
+                  {busy ? 'Opening...' : 'Connect'}
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+
   const composer = (
     <div className="relative z-10 mx-auto w-full max-w-3xl rounded-2xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
       <textarea
@@ -718,7 +894,8 @@ export default function Home() {
         </div>
         <div className="flex flex-col gap-2">
           <button onClick={newChat} className="flex items-center gap-3 rounded-lg bg-white/15 p-3 text-sm font-bold hover:bg-white/25"><span>+</span> New Chat</button>
-          <button onClick={() => { if (!userId) { setShowAuthModal(true); closeSidebarOnMobile(); return; } setShowDashboard(true); setActiveResume(null); setResumePreviewOpen(false); loadResumes(); closeSidebarOnMobile(); }} className={`flex items-center gap-3 rounded-lg p-3 text-sm hover:bg-white/10 ${showDashboard ? 'bg-white/20 font-bold' : ''}`}><span>[]</span> Resumes / CVs</button>
+          <button onClick={openResumesDashboard} className={`flex items-center gap-3 rounded-lg p-3 text-sm hover:bg-white/10 ${activeView === 'resumes' ? 'bg-white/20 font-bold' : ''}`}><span>[]</span> Resumes / CVs</button>
+          <button onClick={openAppsDashboard} className={`flex items-center gap-3 rounded-lg p-3 text-sm hover:bg-white/10 ${activeView === 'apps' ? 'bg-white/20 font-bold' : ''}`}><span>*</span> Apps</button>
         </div>
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <div className="mb-2 px-2 text-xs font-bold text-white/50">CHAT HISTORY</div>
@@ -754,7 +931,9 @@ export default function Home() {
         </header>
 
         {!activeResume ? (
-          showDashboard ? (
+          activeView === 'apps' ? (
+            connectionsDashboard
+          ) : activeView === 'resumes' ? (
             <section className="mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col overflow-hidden px-4 py-6 sm:px-6">
               <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
@@ -778,7 +957,7 @@ export default function Home() {
                       <p className="text-xs text-slate-500">Uploaded on {new Date(r.created_at).toLocaleDateString()}</p>
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
-                      <button onClick={() => { setActiveResume(r); setResumePreviewOpen(false); setShowDashboard(false); setMessages(prev => [...prev, makeTextMessage('assistant', 'Resume loaded. Ask me to edit it, search jobs, or open the preview to edit manually.')]); }} className="rounded-md bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-200">Select</button>
+                      <button onClick={() => { setActiveResume(r); setResumePreviewOpen(false); setActiveView('chat'); setMessages(prev => [...prev, makeTextMessage('assistant', 'Resume loaded. Ask me to edit it, search jobs, or open the preview to edit manually.')]); }} className="rounded-md bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-200">Select</button>
                       <button onClick={() => deleteResume(r.id)} className="rounded-md bg-red-50 px-3 py-1.5 text-xs font-bold text-red-600 hover:bg-red-100">Delete</button>
                     </div>
                   </div>
@@ -823,7 +1002,7 @@ export default function Home() {
                 >
                   {resumePreviewOpen ? 'Hide Preview' : 'Resume Preview'}
                 </button>
-                <button onClick={() => { setActiveResume(null); setResumePreviewOpen(false); setShowDashboard(true); loadResumes(); }} className="rounded-lg px-4 py-2 text-xs font-bold text-slate-500 hover:bg-slate-100">RESUMES</button>
+                <button onClick={openResumesDashboard} className="rounded-lg px-4 py-2 text-xs font-bold text-slate-500 hover:bg-slate-100">RESUMES</button>
               </div>
             </div>
             <div className="app-scroll-region flex-1 space-y-5 px-4 py-6">
