@@ -8,6 +8,7 @@ import {
   type BillingAction,
 } from '@/lib/billing';
 import { generateGeminiContent } from '@/lib/gemini';
+import { RESUME_FACT_SAFETY_RULES } from '@/lib/resumeFacts';
 
 export type EditOp = { operation?: 'replace' | 'add' | 'remove'; path: string; value?: unknown };
 
@@ -152,7 +153,16 @@ function applyOp(parsedInput: any, op: EditOp) {
 async function geminiOps(message: string, parsed: any): Promise<{ operations: EditOp[]; reply?: string; model?: string }> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return { operations: [] };
-  const prompt = `Convert this resume edit request into JSON operations only. Do not return markdown or a full resume. Paths must use experience.0.role, experience.0.company, experience.0.location, experience.0.dates, experience.0.bullets.0, skills, education.0.degree. For 'make skills say X' or 'set skills to X', return operation replace, path skills, value [X]. For 'add skill X', return operation add, path skills, value X. If the user pastes a full job description, experience block, or a chunk of text to add as a job, return an operation with operation: 'add', path: 'experience', and a value object containing exactly these fields: { role, company, location, dates, bullets: [...] }. Ensure bullets is an array of strings. Return a JSON object with 'operations' array and a short, conversational 'reply' string confirming the specific change (DO NOT put any JSON or full resume text in the reply field, just a short human-readable confirmation). Current resume JSON: ${JSON.stringify(parsed).slice(0, 9000)} Request: ${message}`;
+  const prompt = `${RESUME_FACT_SAFETY_RULES}
+
+Convert this resume edit request into JSON operations only. Do not return markdown or a full resume. Paths must use experience.0.role, experience.0.company, experience.0.location, experience.0.dates, experience.0.bullets.0, skills, education.0.degree.
+
+For broad requests like "tailor my resume", make conservative, fact-safe edits only: headline, summary, skills ordering, and wording that highlights honest transferable skills. Never convert customer service, retail, cart handling, volunteer, or operations work into software engineering or technical infrastructure work.
+
+For 'make skills say X' or 'set skills to X', return operation replace, path skills, value [X]. For 'add skill X', return operation add, path skills, value X. If the user pastes a full job description, experience block, or a chunk of text to add as a job, return an operation with operation: 'add', path: 'experience', and a value object containing exactly these fields: { role, company, location, dates, bullets: [...] }. Ensure bullets is an array of strings. Return a JSON object with 'operations' array and a short, conversational 'reply' string confirming the specific change (DO NOT put any JSON or full resume text in the reply field, just a short human-readable confirmation).
+
+Current resume JSON: ${JSON.stringify(parsed).slice(0, 9000)}
+Request: ${message}`;
   const { data, model } = await generateGeminiContent({
     apiKey,
     body: {
