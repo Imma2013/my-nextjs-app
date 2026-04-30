@@ -86,6 +86,101 @@ function collectText(value: unknown): string {
   return '';
 }
 
+const BULLET_FIELDS = ['bullets', 'highlights', 'details', 'description'] as const;
+
+function bulletList(value: any): string[] {
+  return arr(value)
+    .map(item => compact(typeof item === 'string' ? item : collectText(item)))
+    .filter(Boolean);
+}
+
+function sameBulletList(a: string[], b: string[]) {
+  return normalizeText(a.join('\n')) === normalizeText(b.join('\n'));
+}
+
+function renderedBulletList(item: any): string[] {
+  if (!item) return [];
+  if (typeof item === 'string') return [compact(item)].filter(Boolean);
+  if (typeof item !== 'object' || Array.isArray(item)) return bulletList(item);
+  for (const field of BULLET_FIELDS) {
+    const values = bulletList(item[field]);
+    if (values.length) return values;
+  }
+  return [];
+}
+
+export function canonicalVisibleBullets(item: any, sourceItem?: any): string[] {
+  if (!item) return [];
+  if (typeof item === 'string') return [compact(item)].filter(Boolean);
+  if (typeof item !== 'object' || Array.isArray(item)) return bulletList(item);
+
+  const sourceVisible = renderedBulletList(sourceItem);
+  const candidateBullets = bulletList(item.bullets);
+  if (candidateBullets.length && (!sourceVisible.length || !sameBulletList(candidateBullets, sourceVisible))) {
+    return candidateBullets;
+  }
+
+  for (const field of ['highlights', 'details', 'description'] as const) {
+    const values = bulletList(item[field]);
+    if (values.length && (!sourceVisible.length || !sameBulletList(values, sourceVisible))) {
+      return values;
+    }
+  }
+
+  return candidateBullets.length ? candidateBullets : sourceVisible;
+}
+
+function canonicalizeItem(sourceItem: any, candidateItem: any) {
+  if (!candidateItem || typeof candidateItem !== 'object' || Array.isArray(candidateItem)) return candidateItem;
+  const next = { ...candidateItem };
+  const bullets = canonicalVisibleBullets(next, sourceItem);
+  if (bullets.length) next.bullets = bullets;
+  delete next.highlights;
+  delete next.details;
+  if (typeof next.description === 'string' && bullets.length && bulletList(next.description).length) {
+    delete next.description;
+  }
+  return next;
+}
+
+export function canonicalizeTailoredResume(sourceInput: any, candidateInput: any) {
+  const source = copy(sourceInput || {});
+  const candidate = copy(candidateInput || {});
+  (['experience', 'projects', 'communityService', 'volunteer', 'volunteering'] as const).forEach(key => {
+    const candidateSection = getSection(candidate, key);
+    if (!candidateSection.length) return;
+    const sourceSection = getSection(source, key);
+    setSection(candidate, key, candidateSection.map((item, index) => canonicalizeItem(sourceSection[index], item)));
+  });
+  return candidate;
+}
+
+function visibleSectionText(parsed: any, key: string) {
+  return normalizeText(getSection(parsed, key).map(item => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return collectText(item);
+    return [
+      item.role || item.title || item.name || item.company || item.organization || '',
+      ...canonicalVisibleBullets(item),
+    ].join('\n');
+  }).join('\n'));
+}
+
+function visibleResumeText(parsed: any) {
+  return normalizeText([
+    parsed?.profile || parsed?.professionalSummary || parsed?.summary || '',
+    visibleSectionText(parsed, 'experience'),
+    visibleSectionText(parsed, 'projects'),
+    visibleSectionText(parsed, 'communityService'),
+    visibleSectionText(parsed, 'volunteer'),
+    visibleSectionText(parsed, 'volunteering'),
+    getSection(parsed, 'skills').map(collectText).join('\n'),
+  ].join('\n'));
+}
+
+export function hasVisibleTailoringDiff(source: any, tailored: any) {
+  return visibleResumeText(source || {}) !== visibleResumeText(tailored || {});
+}
+
 function isUncertainAnswer(value: string) {
   const text = normalizeText(value);
   return !text
@@ -136,8 +231,8 @@ function removeUnsupportedSentences(value: unknown, unsupportedClaims: Claim[]) 
 }
 
 function sanitizeBulletList(candidateValue: any, sourceValue: any, unsupportedClaims: Claim[]) {
-  const sourceItems = arr(sourceValue);
-  const kept = arr(candidateValue).filter(item => {
+  const sourceItems = bulletList(sourceValue);
+  const kept = bulletList(candidateValue).filter(item => {
     const text = typeof item === 'string' ? item : collectText(item);
     return !unsupportedClaims.some(claim => containsClaim(text, claim));
   });
@@ -147,14 +242,10 @@ function sanitizeBulletList(candidateValue: any, sourceValue: any, unsupportedCl
 function sanitizeDescriptiveFields(item: any, sourceItem: any, unsupportedClaims: Claim[]) {
   if (!item || typeof item !== 'object' || Array.isArray(item)) return item;
   const next = { ...item };
-  (['bullets', 'highlights', 'details'] as const).forEach(field => {
-    if (field in next || field in (sourceItem || {})) {
-      next[field] = sanitizeBulletList(next[field], sourceItem?.[field], unsupportedClaims);
-    }
-  });
-  if (typeof next.description === 'string') {
-    next.description = removeUnsupportedSentences(next.description, unsupportedClaims) || sourceItem?.description || '';
-  }
+  next.bullets = sanitizeBulletList(canonicalVisibleBullets(next, sourceItem), canonicalVisibleBullets(sourceItem), unsupportedClaims);
+  delete next.highlights;
+  delete next.details;
+  delete next.description;
   return next;
 }
 
@@ -240,10 +331,6 @@ function deriveMissingKeywords({
   return dedupe(missing).slice(0, 8);
 }
 
-function simpleSectionText(parsed: any, key: string) {
-  return normalizeText(getSection(parsed, key).map(collectText).join('\n'));
-}
-
 function deriveImprovements(source: any, tailored: any) {
   const improvements: string[] = [];
   if (normalizeText(source.summary || source.profile || source.professionalSummary) !== normalizeText(tailored.summary || tailored.profile || tailored.professionalSummary)) {
@@ -252,13 +339,13 @@ function deriveImprovements(source: any, tailored: any) {
   if (normalizeText(source.headline || source.title) !== normalizeText(tailored.headline || tailored.title)) {
     improvements.push('Adjusted the headline while preserving the candidate identity.');
   }
-  if (simpleSectionText(source, 'experience') !== simpleSectionText(tailored, 'experience')) {
+  if (visibleSectionText(source, 'experience') !== visibleSectionText(tailored, 'experience')) {
     improvements.push('Refocused existing experience bullets on relevant, supported responsibilities.');
   }
-  if (simpleSectionText(source, 'projects') !== simpleSectionText(tailored, 'projects')) {
+  if (visibleSectionText(source, 'projects') !== visibleSectionText(tailored, 'projects')) {
     improvements.push('Updated project descriptions with only supported tools and scope.');
   }
-  if (simpleSectionText(source, 'skills') !== simpleSectionText(tailored, 'skills')) {
+  if (normalizeText(getSection(source, 'skills').map(collectText).join('\n')) !== normalizeText(getSection(tailored, 'skills').map(collectText).join('\n'))) {
     improvements.push('Reordered or trimmed skills to match confirmed qualifications.');
   }
   return improvements.slice(0, 4);
@@ -292,7 +379,7 @@ export function auditTailoredResume({
   fallbackSummary: string;
 }) {
   const source = copy(sourceParsed || {});
-  const audited = copy(tailoredParsed || {});
+  const audited = canonicalizeTailoredResume(source, tailoredParsed || {});
   const supportCorpus = [collectText(source), supportedAnswerText(answers)].join('\n');
   const jobText = `${job.title || ''}\n${job.company_name || ''}\n${job.description || ''}`;
   const unsupportedClaims = CLAIMS.filter(claim => containsClaim(collectText(audited), claim) && !containsClaim(supportCorpus, claim));

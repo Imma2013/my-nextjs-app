@@ -8,7 +8,7 @@ import {
 } from '@/lib/billing';
 import { generateGeminiContent, geminiUserError } from '@/lib/gemini';
 import { RESUME_FACT_SAFETY_RULES } from '@/lib/resumeFacts';
-import { auditTailoredResume } from '@/lib/resumeTailorAudit';
+import { auditTailoredResume, canonicalVisibleBullets, canonicalizeTailoredResume, hasVisibleTailoringDiff } from '@/lib/resumeTailorAudit';
 
 type TailorJob = {
   title?: string;
@@ -215,7 +215,7 @@ function enrichExperienceFromRawText(parsedInput: any, rawText?: string | null) 
 
 function normalizeResumeJson(sourceInput: any, candidateInput: any) {
   const source = copy(unwrapResumeObject(sourceInput));
-  const candidate = copy(unwrapResumeObject(candidateInput));
+  const candidate = canonicalizeTailoredResume(source, unwrapResumeObject(candidateInput));
   const normalized: any = {
     ...source,
     ...candidate,
@@ -229,12 +229,9 @@ function normalizeResumeJson(sourceInput: any, candidateInput: any) {
     normalized[key] = normalized.sections[key];
   });
 
-  normalized.contact = candidate.contact && typeof candidate.contact === 'object'
-    ? { ...(source.contact || {}), ...candidate.contact }
-    : source.contact || {};
-
-  normalized.candidateName = candidate.candidateName || candidate.name || source.candidateName || source.name || '';
-  normalized.name = normalized.candidateName || candidate.name || source.name || '';
+  normalized.contact = source.contact || {};
+  normalized.candidateName = source.candidateName || source.name || candidate.candidateName || candidate.name || '';
+  normalized.name = source.name || normalized.candidateName || '';
   normalized.headline = candidate.headline || candidate.title || source.headline || source.title || '';
   normalized.title = normalized.headline || candidate.title || source.title || '';
 
@@ -248,11 +245,12 @@ function normalizeResumeJson(sourceInput: any, candidateInput: any) {
         PRESERVED_EXPERIENCE_FIELDS.forEach(field => {
           if (sourceItem[field]) next[field] = sourceItem[field];
         });
-        if (!arr(next.bullets || next.highlights || next.description || next.details).length) {
-          next.bullets = arr(sourceItem.bullets || sourceItem.highlights || sourceItem.description || sourceItem.details);
-        }
+        next.bullets = canonicalVisibleBullets(next, sourceItem);
         if (next.role && !next.title) next.title = next.role;
         if (next.title && !next.role) next.role = next.title;
+        delete next.highlights;
+        delete next.details;
+        delete next.description;
         return next;
       });
     normalized.experience = normalized.sections.experience;
@@ -291,6 +289,10 @@ function normalizeResumeJson(sourceInput: any, candidateInput: any) {
         ['name', 'title', 'dates', 'date'].forEach(field => {
           if (sourceItem[field]) next[field] = sourceItem[field];
         });
+        next.bullets = canonicalVisibleBullets(next, sourceItem);
+        delete next.highlights;
+        delete next.details;
+        if (next.bullets.length) delete next.description;
         return next;
       });
     normalized.projects = normalized.sections.projects;
@@ -301,17 +303,19 @@ function normalizeResumeJson(sourceInput: any, candidateInput: any) {
     return { parsed: source, usedSourceFallback: true };
   }
 
-  return { parsed: normalized, usedSourceFallback: false };
+  return { parsed: canonicalizeTailoredResume(source, normalized), usedSourceFallback: false };
 }
 
 async function tailorWithGemini({
   parsed,
   job,
   answers,
+  visibleOnlyRetry = false,
 }: {
   parsed: any;
   job: TailorJob;
   answers?: TailorAnswer[];
+  visibleOnlyRetry?: boolean;
 }) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('Gemini API key is not configured');
@@ -327,10 +331,13 @@ Specific constraints:
 - User clarification answers are confirmed facts for this tailored resume copy only. Use them only where they are specific, relevant, and not blank or "I don't know".
 - If a clarification answer is blank, skipped, uncertain, or says "I don't know", do not invent the related fact. Create a conservative resume and list the unsupported keyword or requirement in missingKeywords.
 - Example: HEB/customer service/cart handling work may mention customer support, teamwork, reliability, accuracy, communication, and operational support. It must not mention software engineering, production systems, infrastructure, internal systems, or data migration unless those facts already appear in that HEB role.
+- For non-technical leadership, service, or operations roles, supported clarification facts may be placed in visible bullets. Six Flags lead work may mention task assignment, schedule coordination, team direction, operational support, and guest assistance when confirmed. Trumpet instruction may mention mentoring, teaching practice methods, and supporting student development when confirmed. Volunteer/admin work may mention event or program support, service coordination, and communication when confirmed.
 - Make the tailored resume visibly different in supported places: rewrite existing experience bullets for relevance, improve the profile/summary, and reorder or add honest skills supported by the resume.
+- All rewritten item text MUST be written into preview-visible "bullets" arrays. Do not put rewritten item text only in "highlights", "details", or "description".
 - Do not add a "Key Responsibilities" section copied from the job description.
 - For entry-level customer service/sales roles, honestly emphasize customer assistance, guest support, communication, adaptability, fast-paced service, teamwork, technology comfort if supported by projects/web design, willingness to learn, and growth mindset.
 - Every improvement must describe a change that is actually present in tailoredResume.
+${visibleOnlyRetry ? '- Retry instruction: the prior output did not visibly change the preview. Rewrite only the preview-visible profile/summary, skills ordering, and bullets arrays. Preserve names, employers, job titles, dates, education, and project names exactly.' : ''}
 
 Return:
 - tailoredResume: the complete tailored resume JSON
@@ -509,26 +516,60 @@ export async function POST(req: NextRequest) {
     const chargeKey = String(idempotencyKey || `${userId}:${resumeId}:tailor:${Date.now()}`);
     await assertCanRunPaidAction({ userId, actionType, cost, idempotencyKey: chargeKey });
 
-    const tailored = await tailorWithGemini({ parsed: sourceParsed, job, answers: normalizedAnswers });
-    const { parsed: normalizedTailoredParsed, usedSourceFallback } = normalizeResumeJson(
-      sourceParsed,
-      tailored.tailoredResume && typeof tailored.tailoredResume === 'object' ? tailored.tailoredResume : sourceParsed,
-    );
-
     const role = cleanTitle(job.title || 'Tailored Resume');
     const company = cleanTitle(job.company_name || '');
     const tailoredTitle = `${role}${company ? ` - ${company}` : ''} Tailored`;
     const fallbackSummary = `Tailored for ${role}${company ? ` at ${company}` : ''}.`;
-    const audited = auditTailoredResume({
+
+    let tailored = await tailorWithGemini({ parsed: sourceParsed, job, answers: normalizedAnswers });
+    let normalized = normalizeResumeJson(
       sourceParsed,
-      tailoredParsed: normalizedTailoredParsed,
+      tailored.tailoredResume && typeof tailored.tailoredResume === 'object' ? tailored.tailoredResume : sourceParsed,
+    );
+    let audited = auditTailoredResume({
+      sourceParsed,
+      tailoredParsed: normalized.parsed,
       job,
       answers: normalizedAnswers,
       gemini: tailored,
-      fallbackSummary: usedSourceFallback
+      fallbackSummary: normalized.usedSourceFallback
         ? `Created a safe tailored copy for ${role}${company ? ` at ${company}` : ''}; unsupported claims were left out.`
         : fallbackSummary,
     });
+
+    if (!hasVisibleTailoringDiff(sourceParsed, audited.parsed)) {
+      const retry = await tailorWithGemini({ parsed: sourceParsed, job, answers: normalizedAnswers, visibleOnlyRetry: true });
+      const retryNormalized = normalizeResumeJson(
+        sourceParsed,
+        retry.tailoredResume && typeof retry.tailoredResume === 'object' ? retry.tailoredResume : sourceParsed,
+      );
+      const retryAudited = auditTailoredResume({
+        sourceParsed,
+        tailoredParsed: retryNormalized.parsed,
+        job,
+        answers: normalizedAnswers,
+        gemini: retry,
+        fallbackSummary: retryNormalized.usedSourceFallback
+          ? `Created a safe tailored copy for ${role}${company ? ` at ${company}` : ''}; unsupported claims were left out.`
+          : fallbackSummary,
+      });
+      tailored = retry;
+      normalized = retryNormalized;
+      audited = retryAudited;
+    }
+
+    const hasVisibleDiff = hasVisibleTailoringDiff(sourceParsed, audited.parsed);
+    if (!hasVisibleDiff) {
+      audited = {
+        ...audited,
+        summary: `Created a conservative copy for ${role}${company ? ` at ${company}` : ''}; unsupported claims were left out.`,
+        improvements: [],
+      };
+      audited.parsed.summary = audited.summary;
+      audited.parsed.profile = audited.summary;
+      normalized.usedSourceFallback = true;
+    }
+
     const tailoredParsed = audited.parsed;
     const content = JSON.stringify(tailoredParsed);
     const summary = audited.summary;
