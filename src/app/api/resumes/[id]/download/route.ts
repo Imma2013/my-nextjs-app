@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { adminClient } from '@/lib/billing';
+import { adminClient, FREE_PDF_DOWNLOAD_LIMIT, getBillingSummary } from '@/lib/billing';
 
 function arr(value: any): any[] {
   if (Array.isArray(value)) return value;
@@ -138,7 +138,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     const userId = req.nextUrl.searchParams.get('userId');
     if (!userId) return NextResponse.json({ error: 'Missing userId' }, { status: 400 });
 
-    const { data: resume, error } = await adminClient()
+    const supabase = adminClient();
+    const { data: resume, error } = await supabase
       .from('resumes')
       .select('*')
       .eq('id', params.id)
@@ -146,7 +147,29 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       .single();
     if (error) throw error;
 
+    const billing = await getBillingSummary(userId);
+    if (billing.plan === 'free' && billing.pdfDownloadsUsed >= FREE_PDF_DOWNLOAD_LIMIT) {
+      return NextResponse.json({
+        error: 'Free includes 3 PDF downloads. Upgrade for unlimited downloads.',
+        upgradeRequired: true,
+      }, { status: 402 });
+    }
+
     const pdf = makePdf(resumeLines(resume));
+    if (billing.plan === 'free') {
+      const { error: usageError } = await supabase.from('usage_events').insert({
+        user_id: userId,
+        action_type: 'pdf_download',
+        idempotency_key: `${params.id}:${Date.now()}:${crypto.randomUUID()}`,
+        resume_id: params.id,
+        credits_charged: 0,
+        free_tailor_used: false,
+        status: 'completed',
+        completed_at: new Date().toISOString(),
+      });
+      if (usageError) throw usageError;
+    }
+
     return new NextResponse(pdf, {
       headers: {
         'Content-Type': 'application/pdf',

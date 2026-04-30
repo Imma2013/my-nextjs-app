@@ -22,6 +22,9 @@ type BillingSummary = {
   planStatus: string;
   currentPeriodEnd?: string | null;
   freeTailorAvailable: boolean;
+  starterCredits?: number;
+  pdfDownloadsUsed?: number;
+  pdfDownloadsLimit?: number | null;
 };
 type BillingModalReason = 'out_of_credits' | 'upgrade' | 'topup' | 'billing';
 type ToolkitConnection = {
@@ -481,12 +484,16 @@ export default function Home() {
       if (activeSessionId) fd.append('sessionId', activeSessionId);
       const res = await fetch('/api/resumes', { method: 'POST', body: fd });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Upload failed');
+      if (!res.ok) {
+        if (data.upgradeRequired) openBillingModal('upgrade');
+        throw new Error(data.error || 'Upload failed');
+      }
       setActiveResume(data.resume);
       setResumePreviewOpen(false);
       if (data.sessionId) setActiveSessionId(data.sessionId);
       await loadSessions();
       await loadResumes();
+      await loadBilling();
       setActiveView('chat');
       setMessages(prev => [...prev, makeTextMessage('assistant', 'Resume uploaded and converted into editable structured data. Ask me to edit it, or click directly in the preview to edit manually.')]);
     } catch (err) {
@@ -494,6 +501,30 @@ export default function Home() {
     } finally {
       setUploading(false);
       e.target.value = '';
+    }
+  }
+
+  async function downloadResumePdf(url: string, fallbackName = 'resume.pdf') {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) {
+        const data = await readJsonResponse(res, 'Download failed');
+        if (data.upgradeRequired) openBillingModal('upgrade');
+        throw new Error(data.error || 'Download failed');
+      }
+
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = fallbackName;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(objectUrl);
+      await loadBilling();
+    } catch (err) {
+      setMessages(prev => [...prev, makeTextMessage('assistant', 'Download failed: ' + (err instanceof Error ? err.message : 'Unknown error'))]);
     }
   }
 
@@ -684,14 +715,13 @@ export default function Home() {
               >
                 Preview
               </button>
-              <a
-                href={result.downloadUrl}
-                target="_blank"
-                rel="noopener noreferrer"
+              <button
+                type="button"
+                onClick={() => downloadResumePdf(result.downloadUrl, `${(result.resume.title || 'tailored-resume').replace(/[^\w\s.-]/g, '').replace(/\s+/g, '-')}.pdf`)}
                 className="rounded-lg bg-blue-50 px-4 py-2 text-sm font-bold text-blue-700 hover:bg-blue-100"
               >
                 Download PDF
-              </a>
+              </button>
             </div>
           </div>
         );
@@ -786,14 +816,15 @@ export default function Home() {
           <div className="pr-8">
             <h2 className="text-xl font-bold text-slate-900 sm:text-2xl">{billingModalTitle}</h2>
             <p className="mt-2 text-sm leading-6 text-slate-600">
-              AI resume edits use credits. Job search, uploads, and manual preview edits stay free.
+              Free includes unlimited job search, one uploaded resume, one tailored resume, 2 starter credits, and 3 PDF downloads. AI resume actions use credits.
             </p>
           </div>
 
-          <div className="mt-5 grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700 sm:grid-cols-3">
+          <div className="mt-5 grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700 sm:grid-cols-4">
             <div>
               <span className="block text-xs font-bold uppercase text-slate-500">Credits</span>
               <b className="mt-1 block text-lg text-slate-900">{billing?.credits ?? 0}</b>
+              <span className="text-xs text-slate-500">{billing?.plan === 'free' ? `${billing.starterCredits ?? 2} starter` : 'Available'}</span>
             </div>
             <div>
               <span className="block text-xs font-bold uppercase text-slate-500">Current plan</span>
@@ -804,6 +835,12 @@ export default function Home() {
               <span className="block text-xs font-bold uppercase text-slate-500">Free tailor</span>
               <b className={`mt-1 block text-lg ${billing?.freeTailorAvailable ? 'text-blue-700' : 'text-slate-900'}`}>
                 {billing?.freeTailorAvailable ? 'Available' : 'Used'}
+              </b>
+            </div>
+            <div>
+              <span className="block text-xs font-bold uppercase text-slate-500">PDF downloads</span>
+              <b className="mt-1 block text-lg text-slate-900">
+                {billing?.pdfDownloadsLimit ? `${billing.pdfDownloadsUsed ?? 0}/${billing.pdfDownloadsLimit}` : 'Unlimited'}
               </b>
             </div>
           </div>
@@ -1048,7 +1085,12 @@ export default function Home() {
               <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <h2 className="text-2xl font-bold text-slate-900">My Resumes / CVs</h2>
-                  {billing && <p className="mt-1 text-sm text-slate-500">{planLabel} plan - {billing.credits} credits available</p>}
+                  {billing && (
+                    <p className="mt-1 text-sm text-slate-500">
+                      {planLabel} plan - {billing.credits} credits available
+                      {billing.pdfDownloadsLimit ? ` - ${billing.pdfDownloadsUsed ?? 0}/${billing.pdfDownloadsLimit} PDF downloads used` : ' - unlimited PDF downloads'}
+                    </p>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
                   {billing && <button onClick={() => openBillingModal(paidPlan ? 'billing' : 'upgrade')} className="rounded-md border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50">Billing</button>}

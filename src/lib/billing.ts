@@ -36,6 +36,9 @@ export const PLAN_NAMES: Record<CheckoutPlan, string> = {
   pro_plus: 'Pro Plus',
 };
 
+export const STARTER_CREDITS = 2;
+export const FREE_PDF_DOWNLOAD_LIMIT = 3;
+
 export function adminClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -77,11 +80,36 @@ export function creditsForTopUp(pkg: TopUpPackage) {
   return TOP_UP_CREDITS[pkg];
 }
 
+export async function ensureStarterCredits(userId: string) {
+  const supabase = adminClient();
+  const { data: existing, error: existingError } = await supabase
+    .from('credit_ledger')
+    .select('id')
+    .eq('user_id', userId)
+    .contains('metadata', { grant: 'starter_credits' })
+    .limit(1);
+
+  if (existingError) throw existingError;
+  if (existing?.length) return;
+
+  const { error } = await supabase
+    .from('credit_ledger')
+    .insert({
+      user_id: userId,
+      event_type: 'grant',
+      amount: STARTER_CREDITS,
+      source: 'stripe_topup',
+      metadata: { grant: 'starter_credits', label: 'Free starter credits' },
+    });
+  if (error && !error.message?.includes('duplicate')) throw error;
+}
+
 export async function getBillingSummary(userId: string) {
   const supabase = adminClient();
   const now = new Date().toISOString();
+  await ensureStarterCredits(userId);
 
-  const [{ data: ledger, error: ledgerError }, { data: subscription }, { data: freeTailorEvents }] = await Promise.all([
+  const [{ data: ledger, error: ledgerError }, { data: subscription }, { data: freeTailorEvents }, { data: pdfDownloads }] = await Promise.all([
     supabase
       .from('credit_ledger')
       .select('amount, expires_at')
@@ -103,6 +131,12 @@ export async function getBillingSummary(userId: string) {
       .eq('free_tailor_used', true)
       .eq('status', 'completed')
       .limit(1),
+    supabase
+      .from('usage_events')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('action_type', 'pdf_download')
+      .eq('status', 'completed'),
   ]);
 
   if (ledgerError) throw ledgerError;
@@ -117,6 +151,9 @@ export async function getBillingSummary(userId: string) {
     planStatus: subscription?.status || 'free',
     currentPeriodEnd: subscription?.current_period_end || null,
     freeTailorAvailable: !freeTailorEvents?.length,
+    starterCredits: STARTER_CREDITS,
+    pdfDownloadsUsed: pdfDownloads?.length || 0,
+    pdfDownloadsLimit: plan === 'free' ? FREE_PDF_DOWNLOAD_LIMIT : null,
   };
 }
 

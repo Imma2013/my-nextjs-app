@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getBillingSummary } from '@/lib/billing';
 
 const BUCKET = 'resume-files';
 
@@ -86,15 +87,31 @@ export async function POST(req: NextRequest) {
     if (!file) return NextResponse.json({ error: 'No file provided' }, { status: 400 });
     if (!userId) return NextResponse.json({ error: 'Missing userId' }, { status: 400 });
 
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!supabaseUrl || !serviceKey) return NextResponse.json({ error: 'Supabase is not configured' }, { status: 500 });
+
+    const billing = await getBillingSummary(userId);
+    if (billing.plan === 'free') {
+      const existingResumesRes = await fetch(`${supabaseUrl}/rest/v1/resumes?user_id=eq.${encodeURIComponent(userId)}&storage_path=not.is.null&select=id`, {
+        method: 'GET',
+        headers: restHeaders(serviceKey),
+      });
+      if (!existingResumesRes.ok) throw new Error(await existingResumesRes.text());
+      const existingResumes = await existingResumesRes.json();
+      if ((existingResumes || []).length >= 1) {
+        return NextResponse.json({
+          error: 'Free includes one uploaded resume. Upgrade to create more base resumes.',
+          upgradeRequired: true,
+        }, { status: 402 });
+      }
+    }
+
     const parseForm = new FormData();
     parseForm.append('file', file);
     const parsedRes = await fetch(new URL('/api/parse-resume', req.url), { method: 'POST', body: parseForm });
     const parsedData = await parsedRes.json();
     if (!parsedRes.ok) return NextResponse.json(parsedData, { status: parsedRes.status });
-
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    if (!supabaseUrl || !serviceKey) return NextResponse.json({ error: 'Supabase is not configured' }, { status: 500 });
 
     const parsed = parsedData.parsed || {};
     const candidateName = parsedData.candidateName || parsed.candidateName || '';
