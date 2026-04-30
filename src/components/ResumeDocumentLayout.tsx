@@ -1,0 +1,61 @@
+'use client';
+
+type ResumeLike = { id?: string; title?: string; candidate_name?: string; headline?: string; summary?: string; parsed_json?: any } | null;
+type EditPayload = { operation: 'replace' | 'add' | 'remove'; path: string; value?: unknown };
+
+function arr(v: any): any[] { if (Array.isArray(v)) return v; if (typeof v === 'string') return v.split('\n').filter(Boolean); return []; }
+function sec(p: any, k: string) { return arr(p?.sections?.[k] ?? p?.[k]); }
+function label(x: any, fallback: string) { if (!x) return fallback; if (typeof x === 'string') return x; return x.role || x.title || x.name || x.degree || x.school || x.company || fallback; }
+function bullets(x: any): string[] { if (!x) return []; if (typeof x === 'string') return [x]; const v = x.bullets || x.highlights || x.description || x.details || []; if (Array.isArray(v)) return v.map((y: any) => typeof y === 'string' ? y : JSON.stringify(y)); return typeof v === 'string' ? [v] : []; }
+function useful(v: any) { const text = String(v || '').trim(); return ['company', 'organization', 'employer', 'school', 'institution', 'project'].includes(text.toLowerCase()) ? '' : text; }
+function org(x: any) { return useful(x?.company) || useful(x?.organization) || useful(x?.employer) || useful(x?.school) || useful(x?.institution) || ''; }
+function dates(x: any) { return x?.dates || x?.date || x?.duration || ''; }
+function projectTitle(x: any) { return useful(x?.title) || useful(x?.name) || useful(x?.description)?.split('\n')[0]?.slice(0, 90) || 'Project'; }
+function community(p: any) {
+  return [
+    ...sec(p, 'communityService').map((item, index) => ({ item, key: 'communityService', index })),
+    ...sec(p, 'volunteer').map((item, index) => ({ item, key: 'volunteer', index })),
+    ...sec(p, 'volunteering').map((item, index) => ({ item, key: 'volunteering', index })),
+  ];
+}
+
+function EditableText({ value, className, placeholder, onSave }: { value: string; className?: string; placeholder?: string; onSave: (value: string) => void }) {
+  return <input className={`${className || ''} -mx-1 rounded px-1 outline-none hover:bg-blue-50 focus:bg-blue-50 focus:ring-1 focus:ring-blue-300`} defaultValue={value || ''} placeholder={placeholder} onBlur={e => { if (e.currentTarget.value !== value) onSave(e.currentTarget.value); }} onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }} />;
+}
+
+function EditableLine({ value, onSave }: { value: string; onSave: (value: string) => void }) {
+  return <textarea className="w-full resize-none rounded px-1 py-0.5 text-sm leading-6 text-slate-600 outline-none hover:bg-blue-50 focus:bg-blue-50 focus:ring-1 focus:ring-blue-300" defaultValue={value || ''} rows={2} onBlur={e => { if (e.currentTarget.value !== value) onSave(e.currentTarget.value); }} />;
+}
+
+function TextValue({ value, className, fallback = '' }: { value: string; className?: string; fallback?: string }) {
+  return <span className={className}>{value || fallback}</span>;
+}
+
+function LineValue({ value }: { value: string }) {
+  return <p className="text-sm leading-6 text-slate-600">{value}</p>;
+}
+
+export default function ResumeDocumentLayout({ resume, onEdit }: { resume: ResumeLike; onEdit?: (edit: EditPayload) => void }) {
+  const p = resume?.parsed_json || {}; const contact = p.contact || {}; const exp = sec(p, 'experience'); const edu = sec(p, 'education'); const skills = sec(p, 'skills'); const projects = sec(p, 'projects'); const awards = sec(p, 'awards'); const service = community(p);
+  const editable = Boolean(onEdit);
+  const edit = onEdit || (() => {});
+  const name = resume?.candidate_name || p.candidateName || p.name || 'Your Name'; const headline = resume?.headline || p.headline || p.title || 'Resume';
+  const summary = p.profile || p.professionalSummary || p.summary || resume?.summary || '';
+  const text = (value: string, className: string, path: string, placeholder?: string) => editable
+    ? <EditableText value={value} className={className} placeholder={placeholder} onSave={next => edit({ operation: 'replace', path, value: next })} />
+    : <TextValue value={value} className={className} fallback={placeholder} />;
+  const line = (value: string, path: string) => editable
+    ? <EditableLine value={value} onSave={next => edit({ operation: 'replace', path, value: next })} />
+    : <LineValue value={value} />;
+
+  return <div className="resume-document mx-auto min-h-[900px] max-w-[850px] bg-white px-16 py-14 text-slate-800 shadow-sm ring-1 ring-slate-200">
+    <div className="mb-6 border-b border-slate-200 pb-6 text-center">{text(name, 'block w-full text-center font-serif text-3xl font-bold text-slate-800', 'candidateName')}<p className="mt-2 text-[11px] uppercase tracking-wide text-slate-500">{[contact.location, contact.email, contact.phone].filter(Boolean).join(' • ') || headline}</p></div>
+    {summary && <section className="mb-5"><h3 className="border-b border-slate-800 font-serif text-lg font-semibold uppercase text-slate-700">Profile</h3>{line(summary, 'summary')}</section>}
+    <section className="mb-5"><h3 className="border-b border-slate-800 font-serif text-lg font-semibold uppercase text-slate-700">Experience</h3>{(exp.length ? exp : [{ role: 'Job Title', bullets: ['Upload a resume to populate this live preview.'] }]).map((item: any, idx: number) => <div key={idx} className="mt-3 text-sm"><div className="grid grid-cols-[1fr_auto] gap-x-4"><div>{text(label(item, 'Job Title'), 'block w-full font-semibold', `experience.${idx}.role`)}{text([org(item), item.location].filter(Boolean).join(' - '), 'block w-full', `experience.${idx}.company`)}</div>{text(dates(item), 'block w-48 text-right font-serif text-xs font-semibold uppercase', `experience.${idx}.dates`, 'Dates')}</div><ul className="mt-1 list-disc pl-4 leading-6 text-slate-600">{bullets(item).map((b, i) => <li key={i}>{line(b, `experience.${idx}.bullets.${i}`)}</li>)}</ul></div>)}</section>
+    {projects.length > 0 && <section className="mb-5"><h3 className="border-b border-slate-800 font-serif text-lg font-semibold uppercase text-slate-700">Projects</h3>{projects.map((item: any, idx: number) => <div key={idx} className="mt-2 text-sm">{text(projectTitle(item), 'block w-full font-semibold', `projects.${idx}.title`)}<ul className="list-disc pl-4 leading-6 text-slate-600">{bullets(item).map((b, i) => <li key={i}>{line(b, `projects.${idx}.bullets.${i}`)}</li>)}</ul></div>)}</section>}
+    <section className="mb-5"><h3 className="border-b border-slate-800 font-serif text-lg font-semibold uppercase text-slate-700">Education</h3>{(edu.length ? edu : ['Degree - College Name - Location']).map((item: any, idx: number) => <div key={idx}>{line(typeof item === 'string' ? item : [item.degree, item.school || item.institution, item.location, item.dates].filter(Boolean).join(' - '), `education.${idx}`)}</div>)}</section>
+    <section className="mb-5"><h3 className="border-b border-slate-800 font-serif text-lg font-semibold uppercase text-slate-700">Skills</h3><div className="mt-2 flex flex-wrap gap-2 text-sm text-slate-600">{(skills.length ? skills : ['Skills will appear here after upload.']).map((s: any, i: number) => editable ? <EditableText key={i} value={typeof s === 'string' ? s : label(s, '')} className="rounded border border-slate-200 px-2 py-1" onSave={value => edit({ operation: 'replace', path: `skills.${i}`, value })} /> : <span key={i} className="rounded border border-slate-200 px-2 py-1">{typeof s === 'string' ? s : label(s, '')}</span>)}{editable && resume && <button type="button" onClick={() => edit({ operation: 'add', path: 'skills', value: 'New Skill' })} className="rounded border border-dashed border-blue-300 px-2 py-1 text-xs text-blue-600">+ skill</button>}</div></section>
+    {service.length > 0 && <section className="mb-5"><h3 className="border-b border-slate-800 font-serif text-lg font-semibold uppercase text-slate-700">Community Service</h3>{service.map(({ item, key, index }) => <div key={`${key}-${index}`} className="mt-2 text-sm">{text([org(item) || label(item, 'Organization'), item.role || item.title, dates(item)].filter(Boolean).join(' - '), 'block w-full font-semibold', `${key}.${index}.organization`)}<ul className="list-disc pl-4 leading-6 text-slate-600">{bullets(item).map((b, i) => <li key={i}>{line(b, `${key}.${index}.bullets.${i}`)}</li>)}</ul></div>)}</section>}
+    {awards.length > 0 && <section><h3 className="border-b border-slate-800 font-serif text-lg font-semibold uppercase text-slate-700">Awards</h3>{awards.map((item: any, idx: number) => <div key={idx}>{line(label(item, ''), `awards.${idx}`)}</div>)}</section>}
+  </div>;
+}

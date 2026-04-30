@@ -9,6 +9,7 @@ import {
 import { generateGeminiContent, geminiUserError } from '@/lib/gemini';
 import { RESUME_FACT_SAFETY_RULES } from '@/lib/resumeFacts';
 import { auditTailoredResume, canonicalVisibleBullets, canonicalizeTailoredResume, hasVisibleTailoringDiff } from '@/lib/resumeTailorAudit';
+import { runResumeEdit } from '@/lib/resumeEdit';
 
 type TailorJob = {
   title?: string;
@@ -132,6 +133,36 @@ function answerFactsText(answers: TailorAnswer[]) {
     const answer = item.answer || '(blank or skipped)';
     return `- ${question}Answer: ${answer}`;
   }).join('\n');
+}
+
+function buildTailoringEditInstruction({
+  job,
+  answers,
+  visibleOnlyRetry = false,
+}: {
+  job: TailorJob;
+  answers: TailorAnswer[];
+  visibleOnlyRetry?: boolean;
+}) {
+  return `Tailor this resume copy for the target job using only supported facts.
+
+Target job:
+Title: ${job.title || 'Role'}
+Company: ${job.company_name || 'Company'}
+Location: ${job.location || ''}
+Description:
+${String(job.description || '').slice(0, 12000)}
+
+User clarification answers:
+${answerFactsText(answers)}
+
+Instructions:
+- Rewrite preview-visible summary/profile text, skills ordering, and existing bullets to emphasize honest fit for the job.
+- Put all rewritten responsibility or achievement text in preview-visible bullets arrays only.
+- Keep candidate name, employers, job titles, dates, education, awards, certifications, and project names unchanged.
+- Do not add unsupported claims. If a requirement is unsupported, leave it out.
+- Use specific non-blank clarification answers where relevant. Ignore blank, skipped, uncertain, or "I don't know" answers.
+${visibleOnlyRetry ? '- Retry because the first saved copy did not visibly change: rewrite only summary/profile, skills, and preview-visible bullets. Preserve every identity, employer, title, date, education, and project-name field exactly.' : ''}`;
 }
 
 const SECTION_KEYS = ['experience', 'education', 'skills', 'projects', 'awards', 'certifications', 'communityService'] as const;
@@ -521,42 +552,65 @@ export async function POST(req: NextRequest) {
     const tailoredTitle = `${role}${company ? ` - ${company}` : ''} Tailored`;
     const fallbackSummary = `Tailored for ${role}${company ? ` at ${company}` : ''}.`;
 
-    let tailored = await tailorWithGemini({ parsed: sourceParsed, job, answers: normalizedAnswers });
-    let normalized = normalizeResumeJson(
-      sourceParsed,
-      tailored.tailoredResume && typeof tailored.tailoredResume === 'object' ? tailored.tailoredResume : sourceParsed,
-    );
+    const initialContent = JSON.stringify(sourceParsed);
+    const { data: copiedResume, error: copyError } = await supabase
+      .from('resumes')
+      .insert({
+        user_id: userId,
+        title: tailoredTitle,
+        file_name: `${tailoredTitle}.pdf`,
+        mime_type: 'application/pdf',
+        content: initialContent,
+        raw_text: sourceResume.raw_text || sourceResume.content || initialContent,
+        parsed_json: sourceParsed,
+        summary: sourceResume.summary || sourceParsed.summary || sourceParsed.profile || fallbackSummary,
+        candidate_name: sourceParsed.candidateName || sourceParsed.name || sourceResume.candidate_name || null,
+        headline: sourceParsed.headline || sourceParsed.title || sourceResume.headline || null,
+      })
+      .select('*')
+      .single();
+    if (copyError) throw copyError;
+
+    let editResult = await runResumeEdit({
+      resumeId: copiedResume.id,
+      userId,
+      message: buildTailoringEditInstruction({ job, answers: normalizedAnswers }),
+      billingAction: null,
+      idempotencyKey: `${chargeKey}:edit`,
+      skipBilling: true,
+    });
+
+    let editedResume: any = editResult.resume || copiedResume;
+    let editedParsed = editedResume.parsed_json || sourceParsed;
+
+    if (!hasVisibleTailoringDiff(sourceParsed, editedParsed)) {
+      editResult = await runResumeEdit({
+        resumeId: copiedResume.id,
+        userId,
+        message: buildTailoringEditInstruction({ job, answers: normalizedAnswers, visibleOnlyRetry: true }),
+        billingAction: null,
+        idempotencyKey: `${chargeKey}:edit:retry`,
+        skipBilling: true,
+      });
+      editedResume = editResult.resume || editedResume;
+      editedParsed = editedResume.parsed_json || editedParsed;
+    }
+
+    let normalized = normalizeResumeJson(sourceParsed, editedParsed);
     let audited = auditTailoredResume({
       sourceParsed,
       tailoredParsed: normalized.parsed,
       job,
       answers: normalizedAnswers,
-      gemini: tailored,
+      gemini: {
+        score: hasVisibleTailoringDiff(sourceParsed, normalized.parsed) ? 82 : 45,
+        matchedKeywords: [],
+        missingKeywords: [],
+      },
       fallbackSummary: normalized.usedSourceFallback
         ? `Created a safe tailored copy for ${role}${company ? ` at ${company}` : ''}; unsupported claims were left out.`
         : fallbackSummary,
     });
-
-    if (!hasVisibleTailoringDiff(sourceParsed, audited.parsed)) {
-      const retry = await tailorWithGemini({ parsed: sourceParsed, job, answers: normalizedAnswers, visibleOnlyRetry: true });
-      const retryNormalized = normalizeResumeJson(
-        sourceParsed,
-        retry.tailoredResume && typeof retry.tailoredResume === 'object' ? retry.tailoredResume : sourceParsed,
-      );
-      const retryAudited = auditTailoredResume({
-        sourceParsed,
-        tailoredParsed: retryNormalized.parsed,
-        job,
-        answers: normalizedAnswers,
-        gemini: retry,
-        fallbackSummary: retryNormalized.usedSourceFallback
-          ? `Created a safe tailored copy for ${role}${company ? ` at ${company}` : ''}; unsupported claims were left out.`
-          : fallbackSummary,
-      });
-      tailored = retry;
-      normalized = retryNormalized;
-      audited = retryAudited;
-    }
 
     const hasVisibleDiff = hasVisibleTailoringDiff(sourceParsed, audited.parsed);
     if (!hasVisibleDiff) {
@@ -576,11 +630,7 @@ export async function POST(req: NextRequest) {
 
     const { data: savedResume, error: saveError } = await supabase
       .from('resumes')
-      .insert({
-        user_id: userId,
-        title: tailoredTitle,
-        file_name: `${tailoredTitle}.pdf`,
-        mime_type: 'application/pdf',
+      .update({
         content,
         raw_text: content,
         parsed_json: tailoredParsed,
@@ -588,6 +638,8 @@ export async function POST(req: NextRequest) {
         candidate_name: tailoredParsed.candidateName || tailoredParsed.name || sourceResume.candidate_name || null,
         headline: tailoredParsed.headline || tailoredParsed.title || sourceResume.headline || null,
       })
+      .eq('id', copiedResume.id)
+      .eq('user_id', userId)
       .select('*')
       .single();
     if (saveError) throw saveError;
@@ -610,7 +662,7 @@ export async function POST(req: NextRequest) {
       missingKeywords: audited.missingKeywords,
       downloadUrl: `/api/resumes/${encodeURIComponent(savedResume.id)}/download?userId=${encodeURIComponent(userId)}`,
       billing,
-      processedBy: tailored.model,
+      processedBy: editResult.processedBy,
     });
   } catch (error) {
     console.error('Failed to tailor resume:', error);
