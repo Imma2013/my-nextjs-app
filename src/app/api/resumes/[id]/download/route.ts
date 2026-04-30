@@ -17,6 +17,24 @@ function label(item: any, fallback = '') {
   return item.role || item.title || item.name || item.degree || item.school || item.company || fallback;
 }
 
+function useful(value: any) {
+  const text = String(value || '').trim();
+  return ['company', 'organization', 'employer', 'school', 'institution', 'project'].includes(text.toLowerCase()) ? '' : text;
+}
+
+function org(item: any) {
+  return useful(item?.company) || useful(item?.organization) || useful(item?.employer) || useful(item?.school) || useful(item?.institution) || '';
+}
+
+function dates(item: any) {
+  return item?.dates || item?.date || item?.duration || '';
+}
+
+function projectTitle(item: any) {
+  if (!item || typeof item === 'string') return label(item, 'Project');
+  return useful(item.title) || useful(item.name) || useful(item.description)?.split('\n')[0]?.slice(0, 90) || 'Project';
+}
+
 function bullets(item: any): string[] {
   if (!item) return [];
   if (typeof item === 'string') return [item];
@@ -31,6 +49,7 @@ function resumeLines(resume: any) {
   const lines: string[] = [];
   const name = resume?.candidate_name || parsed.candidateName || parsed.name || 'Resume';
   const headline = resume?.headline || parsed.headline || parsed.title || '';
+  const summary = parsed.profile || parsed.professionalSummary || parsed.summary || resume?.summary || '';
   lines.push(name);
   if (headline) lines.push(headline);
   const contactLine = [contact.location, contact.email, contact.phone].filter(Boolean).join(' | ');
@@ -44,12 +63,13 @@ function resumeLines(resume: any) {
     lines.push('');
   };
 
+  if (summary) addSection('Profile', [summary], item => [String(item)]);
   addSection('Experience', section(parsed, 'experience'), item => [
-    [label(item, 'Role'), item.company || item.organization, item.location, item.dates || item.date || item.duration].filter(Boolean).join(' - '),
+    [label(item, 'Role'), org(item), item.location, dates(item)].filter(Boolean).join(' - '),
     ...bullets(item).map(bullet => `- ${bullet}`),
   ]);
   addSection('Projects', section(parsed, 'projects'), item => [
-    label(item, 'Project'),
+    projectTitle(item),
     ...bullets(item).map(bullet => `- ${bullet}`),
   ]);
   addSection('Education', section(parsed, 'education'), item => [
@@ -57,6 +77,14 @@ function resumeLines(resume: any) {
   ]);
   addSection('Skills', section(parsed, 'skills'), item => [
     typeof item === 'string' ? item : label(item, ''),
+  ]);
+  addSection('Community Service', [
+    ...section(parsed, 'communityService'),
+    ...section(parsed, 'volunteer'),
+    ...section(parsed, 'volunteering'),
+  ], item => [
+    [org(item) || label(item, 'Organization'), item.role || item.title, dates(item)].filter(Boolean).join(' - '),
+    ...bullets(item).map(bullet => `- ${bullet}`),
   ]);
   addSection('Awards', section(parsed, 'awards'), item => [label(item, '')]);
 

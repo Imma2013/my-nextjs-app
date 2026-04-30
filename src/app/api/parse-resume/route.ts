@@ -56,13 +56,23 @@ Return ONLY valid JSON with this exact shape:
   "resumeText": "clean plain text resume content with readable sections and line breaks",
   "candidateName": "candidate name if visible, otherwise empty string",
   "headline": "current title or short professional headline if visible, otherwise empty string",
-  "summary": "one short sentence describing what was extracted",
+  "summary": "candidate profile or resume summary if present, otherwise one short sentence describing what was extracted",
   "issues": [],
-  "sections": { "experience": [], "education": [], "skills": [], "projects": [], "awards": [] }
+  "sections": {
+    "experience": [{ "role": "", "company": "", "location": "", "dates": "", "bullets": [] }],
+    "education": [{ "degree": "", "school": "", "location": "", "dates": "" }],
+    "skills": [],
+    "projects": [{ "title": "", "description": "", "bullets": [] }],
+    "awards": [],
+    "communityService": [{ "organization": "", "role": "", "dates": "", "bullets": [] }]
+  }
 }
 
 Rules:
-- Preserve names, roles, employers, dates, education, skills, projects, and metrics.
+- Preserve names, roles, employers, locations, dates, education, skills, projects, community service, and metrics.
+- For experience, split combined lines like "HEB Mansfield,Texas - Customer Service Assistant" into company "HEB", location "Mansfield, Texas", and role "Customer Service Assistant".
+- Put volunteer/community service under sections.communityService unless it is clearly paid work.
+- If an employer, project title, location, or date is not visible, use an empty string. Do not output placeholders like "Company" or "Project".
 - Remove decorative headers/footers, page numbers, and duplicated artifacts.
 - Do not invent missing details.
 - If the document is not a resume, still extract the readable text.`;

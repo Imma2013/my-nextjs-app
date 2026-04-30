@@ -28,7 +28,7 @@ function resumeText(parsed: any) {
   return JSON.stringify(parsed || {}).slice(0, 14000);
 }
 
-const SECTION_KEYS = ['experience', 'education', 'skills', 'projects', 'awards', 'certifications'] as const;
+const SECTION_KEYS = ['experience', 'education', 'skills', 'projects', 'awards', 'certifications', 'communityService'] as const;
 const PRESERVED_EXPERIENCE_FIELDS = ['role', 'title', 'company', 'organization', 'location', 'dates', 'date', 'duration'] as const;
 
 function arr(value: any): any[] {
@@ -47,6 +47,64 @@ function unwrapResumeObject(value: any) {
 
 function getSection(parsed: any, key: string) {
   return arr(parsed?.sections?.[key] ?? parsed?.[key]);
+}
+
+function normalizedText(value: unknown) {
+  return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function isPlaceholder(value: unknown) {
+  return ['company', 'organization', 'employer', 'school', 'institution', 'project', 'role', 'job title'].includes(normalizedText(value));
+}
+
+function useful(value: unknown) {
+  const text = String(value || '').trim();
+  return text && !isPlaceholder(text) ? text : '';
+}
+
+function parseOrgLocation(prefix: string) {
+  const cleaned = prefix.replace(/\s+/g, ' ').trim();
+  const comma = cleaned.match(/^(.+?)\s+([^,\s]+)\s*,\s*([A-Za-z][A-Za-z\s.]*)$/);
+  if (!comma) return { organization: cleaned, location: '' };
+
+  const beforeCity = comma[1].trim().split(' ');
+  let city = comma[2].trim();
+  if (beforeCity.length > 1 && ['fort', 'new', 'san', 'los', 'las'].includes(beforeCity[beforeCity.length - 1].toLowerCase())) {
+    city = `${beforeCity.pop()} ${city}`;
+  }
+  const organization = beforeCity.join(' ').trim() || cleaned;
+  const state = comma[3].replace(/\s+/g, ' ').trim();
+  return { organization, location: `${city}, ${state}` };
+}
+
+function enrichExperienceFromRawText(parsedInput: any, rawText?: string | null) {
+  const parsed = copy(parsedInput || {});
+  const lines = String(rawText || '').split(/\r?\n/).map(line => line.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  const experience = getSection(parsed, 'experience');
+  if (!experience.length || !lines.length) return parsed;
+
+  parsed.sections = parsed.sections || {};
+  parsed.sections.experience = experience.map((item: any) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return item;
+    const role = normalizedText(item.role || item.title || item.name);
+    if (!role) return item;
+
+    const sourceLine = lines.find(line => {
+      const normalized = normalizedText(line);
+      return normalized.includes(role) && /[-–—]/.test(line);
+    });
+    if (!sourceLine) return item;
+
+    const [prefix] = sourceLine.split(/[-–—]/);
+    const { organization, location } = parseOrgLocation(prefix);
+    return {
+      ...item,
+      company: useful(item.company) || useful(item.organization) || organization,
+      location: useful(item.location) || location,
+    };
+  });
+  parsed.experience = parsed.sections.experience;
+  return parsed;
 }
 
 function normalizeResumeJson(sourceInput: any, candidateInput: any) {
@@ -102,6 +160,21 @@ function normalizeResumeJson(sourceInput: any, candidateInput: any) {
     }
   });
 
+  const sourceService = [
+    ...getSection(source, 'communityService'),
+    ...getSection(source, 'volunteer'),
+    ...getSection(source, 'volunteering'),
+  ];
+  if (sourceService.length) {
+    const candidateService = [
+      ...getSection(normalized, 'communityService'),
+      ...getSection(normalized, 'volunteer'),
+      ...getSection(normalized, 'volunteering'),
+    ];
+    normalized.sections.communityService = candidateService.length ? candidateService : sourceService;
+    normalized.communityService = normalized.sections.communityService;
+  }
+
   const sourceProjects = getSection(source, 'projects');
   if (sourceProjects.length) {
     normalized.sections.projects = getSection(normalized, 'projects')
@@ -144,6 +217,9 @@ Specific constraints:
 - Keep education, certifications, awards, and project names unchanged unless the same fact already exists in the current resume.
 - For unsupported job requirements, add them to missingKeywords instead of inserting them into experience.
 - Example: HEB/customer service/cart handling work may mention customer support, teamwork, reliability, accuracy, communication, and operational support. It must not mention software engineering, production systems, infrastructure, internal systems, or data migration unless those facts already appear in that HEB role.
+- Make the tailored resume visibly different in supported places: rewrite existing experience bullets for relevance, improve the profile/summary, and reorder or add honest skills supported by the resume.
+- Do not add a "Key Responsibilities" section copied from the job description.
+- For entry-level customer service/sales roles, honestly emphasize customer assistance, guest support, communication, adaptability, fast-paced service, teamwork, technology comfort if supported by projects/web design, willingness to learn, and growth mindset.
 
 Return:
 - tailoredResume: the complete tailored resume JSON
@@ -225,7 +301,7 @@ export async function POST(req: NextRequest) {
       .single();
     if (sourceError) throw sourceError;
 
-    const sourceParsed = copy(sourceResume.parsed_json || {});
+    const sourceParsed = enrichExperienceFromRawText(sourceResume.parsed_json || {}, sourceResume.raw_text || sourceResume.content);
     const tailored = await tailorWithGemini({ parsed: sourceParsed, job });
     const { parsed: tailoredParsed, usedSourceFallback } = normalizeResumeJson(
       sourceParsed,
