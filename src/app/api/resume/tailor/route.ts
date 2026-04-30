@@ -73,6 +73,45 @@ function normalizeQuestions(value: unknown): TailorQuestion[] {
     .slice(0, 3) as TailorQuestion[];
 }
 
+function defaultClarificationQuestions(job: TailorJob): TailorQuestion[] {
+  const role = cleanTitle(job.title || 'this role') || 'this role';
+  return [
+    {
+      id: 'relevant_experience',
+      question: `Which of your existing experiences, projects, or skills are most relevant to ${role}?`,
+      reason: 'This helps prioritize proven resume content without adding unsupported claims.',
+    },
+    {
+      id: 'confirmed_tools',
+      question: 'Which job-required tools, systems, or skills have you personally used and can honestly include?',
+      reason: 'Only user-confirmed or resume-supported capabilities should be emphasized.',
+    },
+    {
+      id: 'role_specific_examples',
+      question: 'Are there any specific achievements, responsibilities, or examples you want reflected for this job?',
+      reason: 'Specific confirmed examples make the tailored copy stronger while preserving fact safety.',
+    },
+  ];
+}
+
+function ensureThreeQuestions(questions: TailorQuestion[], job: TailorJob) {
+  const seen = new Set<string>();
+  const merged = [...questions, ...defaultClarificationQuestions(job)]
+    .map((question, index) => {
+      let id = cleanQuestionId(question.id || question.question, index);
+      if (seen.has(id)) id = `${id}_${index + 1}`;
+      seen.add(id);
+      return {
+        id,
+        question: question.question,
+        reason: question.reason,
+      };
+    })
+    .filter(question => question.question)
+    .slice(0, 3);
+  return merged;
+}
+
 function normalizeAnswers(value: unknown): TailorAnswer[] {
   if (!Array.isArray(value)) return [];
   return value
@@ -352,20 +391,21 @@ async function clarifyWithGemini({
 
   const prompt = `${RESUME_FACT_SAFETY_RULES}
 
-Inspect the resume facts and target job before resume tailoring. Decide whether the app should ask clarifying questions before generating a tailored resume.
+Inspect the resume facts and target job before resume tailoring. Return exactly 3 short-answer clarification questions before generating a tailored resume.
 
 Rules:
-- Ask at most 3 short-answer questions.
+- Ask exactly 3 short-answer questions.
 - Ask only for facts that materially affect tailoring and are not already proven by the resume.
 - For frontend, web design, software engineering, full-stack, or technical jobs, prioritize project facts such as alu.pics stack, frontend features, backend/API/database/auth/deployment, and what the user personally built.
-- For non-technical jobs, ask no technical questions. Ask only if the resume has a real ambiguity that affects the role.
-- If the resume already provides enough honest support for the role, return needsClarification false and an empty questions array.
+- For non-technical jobs, ask no technical questions; ask about directly relevant service, operations, communication, sales, leadership, scheduling, safety, or customer-support facts as appropriate.
+- Even if the resume already provides enough honest support for the role, still ask 3 optional questions that could safely improve the tailored copy.
 - Do not ask for metrics, tools, responsibilities, or credentials unless the job materially depends on them.
 - Questions must be answerable in one or two sentences.
+- Blank or uncertain answers are allowed and will be ignored later.
 
 Return JSON with:
-- needsClarification: boolean
-- questions: array of objects with id, question, reason
+- needsClarification: true
+- questions: exactly 3 objects with id, question, reason
 
 Current resume JSON:
 ${resumeText(parsed)}
@@ -408,9 +448,9 @@ ${String(job.description || '').slice(0, 12000)}`;
 
   const raw = data.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
   const parsedResult = JSON.parse(raw.replace(/```json|```/g, '').trim());
-  const questions = normalizeQuestions(parsedResult.questions);
+  const questions = ensureThreeQuestions(normalizeQuestions(parsedResult.questions), job);
   return {
-    needsClarification: Boolean(parsedResult.needsClarification && questions.length),
+    needsClarification: true,
     questions,
     model,
   };
@@ -453,16 +493,14 @@ export async function POST(req: NextRequest) {
     const sourceParsed = enrichExperienceFromRawText(sourceResume.parsed_json || {}, sourceResume.raw_text || sourceResume.content);
     const normalizedAnswers = normalizeAnswers(answers);
 
-    if (!normalizedAnswers.length && !clarificationId) {
+    if (!clarificationId) {
       const clarification = await clarifyWithGemini({ parsed: sourceParsed, job });
-      if (clarification.needsClarification) {
-        return NextResponse.json({
-          needsClarification: true,
-          clarificationId: makeClarificationId(),
-          questions: clarification.questions,
-          processedBy: clarification.model,
-        });
-      }
+      return NextResponse.json({
+        needsClarification: true,
+        clarificationId: makeClarificationId(),
+        questions: ensureThreeQuestions(clarification.questions, job),
+        processedBy: clarification.model,
+      });
     }
 
     const actionType = 'tailor_resume' as const;

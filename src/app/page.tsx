@@ -63,6 +63,10 @@ type TailorResult = {
   billing?: unknown;
   processedBy?: string;
 };
+type PendingTailorSelection = {
+  job: JobResult;
+  jobIndex: number;
+};
 
 function makeTextMessage(role: 'user' | 'assistant', text: string): ChatMessage {
   return {
@@ -181,6 +185,8 @@ export default function Home() {
   const [connectionsError, setConnectionsError] = useState('');
   const [connectionBusy, setConnectionBusy] = useState('');
   const [tailoringJobKey, setTailoringJobKey] = useState('');
+  const [pendingTailorSelection, setPendingTailorSelection] = useState<PendingTailorSelection | null>(null);
+  const [tailorPickerLoading, setTailorPickerLoading] = useState(false);
   const [billing, setBilling] = useState<BillingSummary | null>(null);
   const [billingModalOpen, setBillingModalOpen] = useState(false);
   const [billingModalReason, setBillingModalReason] = useState<BillingModalReason>('upgrade');
@@ -535,6 +541,13 @@ export default function Home() {
       await loadResumes();
       await loadBilling();
       setActiveView('chat');
+      if (pendingTailorSelection) {
+        const pending = pendingTailorSelection;
+        setPendingTailorSelection(null);
+        setMessages(prev => [...prev, makeTextMessage('assistant', 'Resume uploaded and converted into editable structured data.')]);
+        void runTailorJob(pending.job, data.resume, pending.jobIndex);
+        return;
+      }
       setMessages(prev => [...prev, makeTextMessage('assistant', 'Resume uploaded and converted into editable structured data. Ask me to edit it, or click directly in the preview to edit manually.')]);
     } catch (err) {
       setMessages(prev => [...prev, makeTextMessage('assistant', 'Upload failed: ' + (err instanceof Error ? err.message : 'Unknown error'))]);
@@ -736,21 +749,38 @@ export default function Home() {
     }
   }
 
-  function tailorResume(job: JobResult, index = 0) {
-    if (!activeResume) {
-      if (!userId) {
-        setShowAuthModal(true);
-        return;
-      }
-      setActiveView('resumes');
-      setMessages(prev => [
-        ...prev,
-        makeTextMessage('assistant', 'Select or upload a resume first, then I can tailor it to this job.'),
-      ]);
+  async function tailorResume(job: JobResult, index = 0) {
+    if (!userId) {
+      setShowAuthModal(true);
       return;
     }
 
-    void runTailorJob(job, activeResume, index);
+    setPendingTailorSelection({ job, jobIndex: index });
+    setActiveView('chat');
+    setResumePreviewOpen(false);
+    setTailorPickerLoading(true);
+    try {
+      await loadResumes(userId);
+    } finally {
+      setTailorPickerLoading(false);
+    }
+  }
+
+  function selectResumeForTailoring(resume: ResumeContext) {
+    if (!pendingTailorSelection) return;
+    const pending = pendingTailorSelection;
+    setPendingTailorSelection(null);
+    setActiveResume(resume);
+    setResumePreviewOpen(false);
+    void runTailorJob(pending.job, resume, pending.jobIndex);
+  }
+
+  function uploadResumeForTailoring() {
+    if (!userId) {
+      setShowAuthModal(true);
+      return;
+    }
+    fileRef.current?.click();
   }
 
   const handleAuth = async (e: FormEvent) => {
@@ -840,6 +870,30 @@ export default function Home() {
               <ul className="mt-4 list-disc space-y-1 pl-5 text-sm text-slate-600">
                 {result.improvements.slice(0, 4).map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}
               </ul>
+            )}
+            {!!result.matchedKeywords?.length && (
+              <div className="mt-4">
+                <div className="text-xs font-bold uppercase tracking-wide text-slate-400">Matched keywords</div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {result.matchedKeywords.slice(0, 8).map((keyword, index) => (
+                    <span key={`${keyword}-${index}`} className="rounded-md bg-emerald-50 px-2 py-1 text-xs font-bold text-emerald-700">
+                      {keyword}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {!!result.missingKeywords?.length && (
+              <div className="mt-4">
+                <div className="text-xs font-bold uppercase tracking-wide text-slate-400">Left out unless confirmed</div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {result.missingKeywords.slice(0, 8).map((keyword, index) => (
+                    <span key={`${keyword}-${index}`} className="rounded-md bg-amber-50 px-2 py-1 text-xs font-bold text-amber-700">
+                      {keyword}
+                    </span>
+                  ))}
+                </div>
+              </div>
             )}
             <div className="mt-4 flex flex-wrap gap-2">
               <button
@@ -1169,11 +1223,63 @@ export default function Home() {
     </div>
   );
 
+  const tailorResumePicker = pendingTailorSelection && (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm">
+      <button aria-label="Close resume picker" onClick={() => setPendingTailorSelection(null)} className="absolute inset-0 cursor-default" />
+      <aside className="relative z-10 flex max-h-[92dvh] w-full max-w-xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl">
+        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-slate-200 p-5">
+          <div className="min-w-0">
+            <div className="text-xs font-bold uppercase tracking-wide text-blue-600">Choose resume to tailor</div>
+            <h2 className="mt-1 truncate text-lg font-bold text-slate-900">
+              {pendingTailorSelection.job.title || 'Selected role'}{pendingTailorSelection.job.company_name ? ` at ${pendingTailorSelection.job.company_name}` : ''}
+            </h2>
+            <p className="mt-1 text-sm leading-6 text-slate-600">Select the saved resume to use as the source. A new tailored copy will be created.</p>
+          </div>
+          <button onClick={() => setPendingTailorSelection(null)} className="shrink-0 rounded-md px-3 py-1.5 text-sm font-bold text-slate-500 hover:bg-slate-100">x</button>
+        </div>
+
+        <div className="app-scroll-region min-h-0 flex-1 space-y-3 overflow-y-auto p-5">
+          {tailorPickerLoading && (
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">Loading saved resumes...</div>
+          )}
+          {!tailorPickerLoading && resumesList.length === 0 && (
+            <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-6 text-center">
+              <p className="text-sm text-slate-600">Upload a resume before tailoring this job.</p>
+              <button
+                type="button"
+                onClick={uploadResumeForTailoring}
+                disabled={uploading}
+                className="mt-4 rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-60"
+              >
+                {uploading ? 'Uploading...' : 'Upload PDF/DOCX'}
+              </button>
+            </div>
+          )}
+          {!tailorPickerLoading && resumesList.map(resume => (
+            <button
+              key={resume.id}
+              type="button"
+              onClick={() => selectResumeForTailoring(resume)}
+              className="block w-full rounded-lg border border-slate-200 bg-white p-4 text-left shadow-sm hover:border-blue-200 hover:bg-blue-50"
+            >
+              <span className="block truncate font-bold text-slate-900">{resume.title || resume.file_name || 'Untitled resume'}</span>
+              <span className="mt-1 block text-xs text-slate-500">
+                {resume.created_at ? `Uploaded on ${new Date(resume.created_at).toLocaleDateString()}` : 'Saved resume'}
+              </span>
+              {resume.summary && <span className="mt-2 block line-clamp-2 text-sm leading-6 text-slate-600">{resume.summary}</span>}
+            </button>
+          ))}
+        </div>
+      </aside>
+    </div>
+  );
+
   return (
     <div className="fixed inset-0 flex overflow-hidden bg-[#f7f8fb] text-slate-900">
       {authModal}
       {billingModal}
       {previewSheet}
+      {tailorResumePicker}
       <input ref={fileRef} type="file" accept=".pdf,.docx" onChange={uploadFile} className="hidden" />
       {sidebarOpen && <button aria-label="Close sidebar" onClick={() => setSidebarOpen(false)} className="fixed inset-0 z-30 bg-slate-900/30 md:hidden" />}
       <aside className={`fixed inset-y-0 left-0 z-40 flex w-72 shrink-0 flex-col gap-4 overflow-hidden bg-[#332071] px-4 py-4 text-white shadow-2xl transition-transform duration-200 md:static md:w-64 md:shadow-none ${sidebarOpen ? 'translate-x-0' : '-translate-x-full md:hidden'}`}>
