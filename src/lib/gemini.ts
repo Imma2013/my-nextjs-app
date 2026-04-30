@@ -2,6 +2,7 @@ import { type LanguageModelV3 } from '@ai-sdk/provider';
 import { type LanguageModelMiddleware } from 'ai';
 
 export const GEMINI_MODEL_FALLBACKS = [
+  'gemini-3.1-pro-preview',
   'gemini-3-flash-preview',
   'gemini-3.1-flash-lite-preview',
   'gemini-2.5-flash',
