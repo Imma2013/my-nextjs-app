@@ -8,11 +8,13 @@ export function JobResults({
   jobs,
   onTailorResume,
   tailorButtonLabel = 'Tailor resume - 1 credit',
+  tailoringJobKey = '',
 }: {
   query?: string;
   jobs: JobResult[];
-  onTailorResume?: (job: JobResult) => void;
+  onTailorResume?: (job: JobResult, index: number) => void;
   tailorButtonLabel?: string;
+  tailoringJobKey?: string;
 }) {
   const [expandedJobIndex, setExpandedJobIndex] = useState<number | null>(null);
 
@@ -29,6 +31,8 @@ export function JobResults({
       {query && <div className="text-xs font-bold uppercase tracking-wide text-slate-400">Jobs for {query}</div>}
       {jobs.map((job, index) => {
         const isExpanded = expandedJobIndex === index;
+        const jobKey = `${job.title || 'role'}-${job.company_name || 'company'}-${index}`;
+        const isTailoring = tailoringJobKey === jobKey;
 
         return (
           <article
@@ -70,10 +74,11 @@ export function JobResults({
               {onTailorResume && (
                 <button
                   type="button"
-                  onClick={() => onTailorResume(job)}
-                  className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-bold text-white hover:bg-slate-800"
+                  onClick={() => onTailorResume(job, index)}
+                  disabled={isTailoring}
+                  className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-bold text-white hover:bg-slate-800 disabled:opacity-60"
                 >
-                  {tailorButtonLabel}
+                  {isTailoring ? 'Tailoring...' : tailorButtonLabel}
                 </button>
               )}
 

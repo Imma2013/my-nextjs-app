@@ -31,12 +31,31 @@ type ToolkitConnection = {
   isConnected: boolean;
   connectedAccountId?: string;
 };
+type TailorResult = {
+  resume: ResumeContext;
+  score: number;
+  summary: string;
+  improvements: string[];
+  matchedKeywords?: string[];
+  missingKeywords?: string[];
+  downloadUrl: string;
+  billing?: unknown;
+  processedBy?: string;
+};
 
 function makeTextMessage(role: 'user' | 'assistant', text: string): ChatMessage {
   return {
     id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
     role,
     parts: [{ type: 'text', text }],
+  };
+}
+
+function makeTailorResultMessage(result: TailorResult): ChatMessage {
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    role: 'assistant',
+    parts: [{ type: 'tailor_result', result } as any],
   };
 }
 
@@ -132,6 +151,7 @@ export default function Home() {
   const [connectionsLoading, setConnectionsLoading] = useState(false);
   const [connectionsError, setConnectionsError] = useState('');
   const [connectionBusy, setConnectionBusy] = useState('');
+  const [tailoringJobKey, setTailoringJobKey] = useState('');
   const [billing, setBilling] = useState<BillingSummary | null>(null);
   const [billingModalOpen, setBillingModalOpen] = useState(false);
   const [billingModalReason, setBillingModalReason] = useState<BillingModalReason>('upgrade');
@@ -207,7 +227,7 @@ export default function Home() {
     const raw = window.localStorage.getItem('pendingTailorResume');
     if (!raw) return;
     try {
-      const pending = JSON.parse(raw) as { instruction?: string; resume?: ResumeContext };
+      const pending = JSON.parse(raw) as { instruction?: string; resume?: ResumeContext; job?: JobResult; jobIndex?: number };
       if (!pending.instruction || !pending.resume || !hasCreditsForResumeAction(pending.instruction)) return;
       resumedCheckoutRef.current = true;
       window.localStorage.removeItem('pendingTailorResume');
@@ -215,6 +235,10 @@ export default function Home() {
       setResumePreviewOpen(false);
       setActiveView('chat');
       setInput('');
+      if (pending.job) {
+        void runTailorJob(pending.job, pending.resume, pending.jobIndex || 0);
+        return;
+      }
       void sendChatMessage(
         { text: pending.instruction },
         { body: { userId, sessionId: activeSessionId, resumeId: pending.resume.id, idempotencyKey: makeIdempotencyKey() } },
@@ -529,7 +553,54 @@ export default function Home() {
     }
   }
 
-  function tailorResume(job: JobResult) {
+  function jobTailorKey(job: JobResult, index = 0) {
+    return `${job.title || 'role'}-${job.company_name || 'company'}-${index}`;
+  }
+
+  async function runTailorJob(job: JobResult, resume: ResumeContext, index = 0) {
+    const key = jobTailorKey(job, index);
+    setTailoringJobKey(key);
+    setActiveView('chat');
+    setMessages(prev => [...prev, makeTextMessage('user', `Tailor my resume for ${job.title || 'this role'}${job.company_name ? ` at ${job.company_name}` : ''}.`)]);
+    try {
+      const res = await fetch('/api/resume/tailor', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId,
+          resumeId: resume.id,
+          job,
+          idempotencyKey: makeIdempotencyKey(),
+        }),
+      });
+      const data = await res.json();
+      if (data.paymentRequired) {
+        if (typeof window !== 'undefined') {
+          const instruction = [
+            `Tailor my active resume for this job: ${job.title || 'Role'} at ${job.company_name || 'Company'}.`,
+            job.location ? `Location: ${job.location}.` : '',
+            job.description ? `Job description:\n${job.description}` : '',
+          ].filter(Boolean).join('\n\n');
+          window.localStorage.setItem('pendingTailorResume', JSON.stringify({ instruction, resume, job, jobIndex: index }));
+        }
+        openBillingModal('out_of_credits');
+        return;
+      }
+      if (!res.ok) throw new Error(data.error || 'Failed to tailor resume');
+
+      setActiveResume(data.resume);
+      setResumePreviewOpen(true);
+      await loadResumes();
+      if (data.billing) await loadBilling(userId);
+      setMessages(prev => [...prev, makeTailorResultMessage(data as TailorResult)]);
+    } catch (err) {
+      setMessages(prev => [...prev, makeTextMessage('assistant', 'Tailoring failed: ' + (err instanceof Error ? err.message : 'Unknown error'))]);
+    } finally {
+      setTailoringJobKey('');
+    }
+  }
+
+  function tailorResume(job: JobResult, index = 0) {
     if (!activeResume) {
       if (!userId) {
         setShowAuthModal(true);
@@ -551,13 +622,13 @@ export default function Home() {
 
     if (billing && !hasCreditsForResumeAction(instruction)) {
       if (typeof window !== 'undefined') {
-        window.localStorage.setItem('pendingTailorResume', JSON.stringify({ instruction, resume: activeResume }));
+        window.localStorage.setItem('pendingTailorResume', JSON.stringify({ instruction, resume: activeResume, job, jobIndex: index }));
       }
       openBillingModal('out_of_credits');
       return;
     }
 
-    sendMessage(instruction);
+    void runTailorJob(job, activeResume, index);
   }
 
   const handleAuth = async (e: FormEvent) => {
@@ -586,6 +657,45 @@ export default function Home() {
   function renderMessageParts(m: ChatMessage) {
     return m.parts.map((part: any, j: number) => {
       if (part.type === 'text') return <span key={j}>{part.text}</span>;
+      if (part.type === 'tailor_result' && part.result) {
+        const result = part.result as TailorResult;
+        return (
+          <div key={j} className="my-3 rounded-xl border border-blue-100 bg-white p-5 shadow-sm">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <div className="text-xs font-bold uppercase tracking-wide text-blue-600">Tailored resume ready</div>
+                <h3 className="mt-1 text-lg font-bold text-slate-900">{result.resume.title || 'Tailored resume'}</h3>
+                <p className="mt-2 text-sm leading-6 text-slate-600">{result.summary}</p>
+              </div>
+              <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-blue-50 text-lg font-black text-blue-700 ring-1 ring-blue-100">
+                {Math.round(result.score || 0)}
+              </div>
+            </div>
+            {!!result.improvements?.length && (
+              <ul className="mt-4 list-disc space-y-1 pl-5 text-sm text-slate-600">
+                {result.improvements.slice(0, 4).map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}
+              </ul>
+            )}
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => { setActiveResume(result.resume); setResumePreviewOpen(true); }}
+                className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-bold text-white hover:bg-slate-800"
+              >
+                Preview
+              </button>
+              <a
+                href={result.downloadUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="rounded-lg bg-blue-50 px-4 py-2 text-sm font-bold text-blue-700 hover:bg-blue-100"
+              >
+                Download PDF
+              </a>
+            </div>
+          </div>
+        );
+      }
 
       const toolName = getPartToolName(part);
       if (toolName) {
@@ -599,7 +709,7 @@ export default function Home() {
         if (toolName === 'search_jobs') {
           const payload = getSearchJobsPayload(output);
           if (payload) {
-            return <JobResults key={part.toolCallId || j} query={payload.query} jobs={payload.jobs} onTailorResume={tailorResume} tailorButtonLabel={billing?.freeTailorAvailable ? 'Tailor resume - Free' : 'Tailor resume - 1 credit'} />;
+            return <JobResults key={part.toolCallId || j} query={payload.query} jobs={payload.jobs} onTailorResume={tailorResume} tailorButtonLabel={billing?.freeTailorAvailable ? 'Tailor resume - Free' : 'Tailor resume - 1 credit'} tailoringJobKey={tailoringJobKey} />;
           }
         }
 
