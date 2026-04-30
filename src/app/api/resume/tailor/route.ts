@@ -16,6 +16,18 @@ type TailorJob = {
   description?: string;
 };
 
+type TailorAnswer = {
+  questionId: string;
+  question?: string;
+  answer: string;
+};
+
+type TailorQuestion = {
+  id: string;
+  question: string;
+  reason: string;
+};
+
 function copy(value: unknown) {
   return JSON.parse(JSON.stringify(value ?? {}));
 }
@@ -26,6 +38,60 @@ function cleanTitle(value?: string) {
 
 function resumeText(parsed: any) {
   return JSON.stringify(parsed || {}).slice(0, 14000);
+}
+
+function makeClarificationId() {
+  return `clarify_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function cleanQuestionId(value: unknown, index: number) {
+  const cleaned = String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 48);
+  return cleaned || `q${index + 1}`;
+}
+
+function normalizeQuestions(value: unknown): TailorQuestion[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  return value
+    .map((item, index) => {
+      const question = String(item?.question || '').replace(/\s+/g, ' ').trim();
+      if (!question) return null;
+      let id = cleanQuestionId(item?.id || question, index);
+      if (seen.has(id)) id = `${id}_${index + 1}`;
+      seen.add(id);
+      return {
+        id,
+        question: question.slice(0, 220),
+        reason: String(item?.reason || 'This fact materially affects how strongly the resume can match the role.').replace(/\s+/g, ' ').trim().slice(0, 240),
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 3) as TailorQuestion[];
+}
+
+function normalizeAnswers(value: unknown): TailorAnswer[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map(item => ({
+      questionId: String(item?.questionId || '').trim(),
+      question: String(item?.question || '').trim(),
+      answer: String(item?.answer || '').trim(),
+    }))
+    .filter(item => item.questionId)
+    .slice(0, 3);
+}
+
+function answerFactsText(answers: TailorAnswer[]) {
+  if (!answers.length) return 'No clarification answers were supplied.';
+  return answers.map(item => {
+    const question = item.question ? `Question: ${item.question}\n` : '';
+    const answer = item.answer || '(blank or skipped)';
+    return `- ${question}Answer: ${answer}`;
+  }).join('\n');
 }
 
 const SECTION_KEYS = ['experience', 'education', 'skills', 'projects', 'awards', 'certifications', 'communityService'] as const;
@@ -201,9 +267,11 @@ function normalizeResumeJson(sourceInput: any, candidateInput: any) {
 async function tailorWithGemini({
   parsed,
   job,
+  answers,
 }: {
   parsed: any;
   job: TailorJob;
+  answers?: TailorAnswer[];
 }) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('Gemini API key is not configured');
@@ -216,10 +284,13 @@ Specific constraints:
 - Keep all existing experience job titles, employers, locations, and dates unchanged.
 - Keep education, certifications, awards, and project names unchanged unless the same fact already exists in the current resume.
 - For unsupported job requirements, add them to missingKeywords instead of inserting them into experience.
+- User clarification answers are confirmed facts for this tailored resume copy only. Use them only where they are specific, relevant, and not blank or "I don't know".
+- If a clarification answer is blank, skipped, uncertain, or says "I don't know", do not invent the related fact. Create a conservative resume and list the unsupported keyword or requirement in missingKeywords.
 - Example: HEB/customer service/cart handling work may mention customer support, teamwork, reliability, accuracy, communication, and operational support. It must not mention software engineering, production systems, infrastructure, internal systems, or data migration unless those facts already appear in that HEB role.
 - Make the tailored resume visibly different in supported places: rewrite existing experience bullets for relevance, improve the profile/summary, and reorder or add honest skills supported by the resume.
 - Do not add a "Key Responsibilities" section copied from the job description.
 - For entry-level customer service/sales roles, honestly emphasize customer assistance, guest support, communication, adaptability, fast-paced service, teamwork, technology comfort if supported by projects/web design, willingness to learn, and growth mindset.
+- Every improvement must describe a change that is actually present in tailoredResume.
 
 Return:
 - tailoredResume: the complete tailored resume JSON
@@ -231,6 +302,9 @@ Return:
 
 Current resume JSON:
 ${resumeText(parsed)}
+
+User-confirmed clarification answers:
+${answerFactsText(answers || [])}
 
 Job:
 Title: ${job.title || 'Role'}
@@ -266,17 +340,97 @@ ${String(job.description || '').slice(0, 12000)}`;
   return { ...parsedResult, model };
 }
 
+async function clarifyWithGemini({
+  parsed,
+  job,
+}: {
+  parsed: any;
+  job: TailorJob;
+}) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error('Gemini API key is not configured');
+
+  const prompt = `${RESUME_FACT_SAFETY_RULES}
+
+Inspect the resume facts and target job before resume tailoring. Decide whether the app should ask clarifying questions before generating a tailored resume.
+
+Rules:
+- Ask at most 3 short-answer questions.
+- Ask only for facts that materially affect tailoring and are not already proven by the resume.
+- For frontend, web design, software engineering, full-stack, or technical jobs, prioritize project facts such as alu.pics stack, frontend features, backend/API/database/auth/deployment, and what the user personally built.
+- For non-technical jobs, ask no technical questions. Ask only if the resume has a real ambiguity that affects the role.
+- If the resume already provides enough honest support for the role, return needsClarification false and an empty questions array.
+- Do not ask for metrics, tools, responsibilities, or credentials unless the job materially depends on them.
+- Questions must be answerable in one or two sentences.
+
+Return JSON with:
+- needsClarification: boolean
+- questions: array of objects with id, question, reason
+
+Current resume JSON:
+${resumeText(parsed)}
+
+Job:
+Title: ${job.title || 'Role'}
+Company: ${job.company_name || 'Company'}
+Location: ${job.location || ''}
+Description:
+${String(job.description || '').slice(0, 12000)}`;
+
+  const { data, model } = await generateGeminiContent({
+    apiKey,
+    body: {
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      generationConfig: {
+        responseMimeType: 'application/json',
+        responseJsonSchema: {
+          type: 'object',
+          properties: {
+            needsClarification: { type: 'boolean' },
+            questions: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string' },
+                  question: { type: 'string' },
+                  reason: { type: 'string' },
+                },
+                required: ['id', 'question', 'reason'],
+              },
+            },
+          },
+          required: ['needsClarification', 'questions'],
+        },
+      },
+    },
+  });
+
+  const raw = data.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+  const parsedResult = JSON.parse(raw.replace(/```json|```/g, '').trim());
+  const questions = normalizeQuestions(parsedResult.questions);
+  return {
+    needsClarification: Boolean(parsedResult.needsClarification && questions.length),
+    questions,
+    model,
+  };
+}
+
 export async function POST(req: NextRequest) {
   try {
     const {
       userId,
       resumeId,
       job,
+      answers,
+      clarificationId,
       idempotencyKey,
     }: {
       userId?: string;
       resumeId?: string;
       job?: TailorJob;
+      answers?: TailorAnswer[];
+      clarificationId?: string;
       idempotencyKey?: string;
     } = await req.json();
 
@@ -286,11 +440,6 @@ export async function POST(req: NextRequest) {
     if (!job?.title && !job?.description) {
       return NextResponse.json({ error: 'Missing job details' }, { status: 400 });
     }
-
-    const actionType = 'tailor_resume' as const;
-    const cost = creditCostForAction(actionType);
-    const chargeKey = String(idempotencyKey || `${userId}:${resumeId}:tailor:${Date.now()}`);
-    await assertCanRunPaidAction({ userId, actionType, cost, idempotencyKey: chargeKey });
 
     const supabase = adminClient();
     const { data: sourceResume, error: sourceError } = await supabase
@@ -302,7 +451,26 @@ export async function POST(req: NextRequest) {
     if (sourceError) throw sourceError;
 
     const sourceParsed = enrichExperienceFromRawText(sourceResume.parsed_json || {}, sourceResume.raw_text || sourceResume.content);
-    const tailored = await tailorWithGemini({ parsed: sourceParsed, job });
+    const normalizedAnswers = normalizeAnswers(answers);
+
+    if (!normalizedAnswers.length && !clarificationId) {
+      const clarification = await clarifyWithGemini({ parsed: sourceParsed, job });
+      if (clarification.needsClarification) {
+        return NextResponse.json({
+          needsClarification: true,
+          clarificationId: makeClarificationId(),
+          questions: clarification.questions,
+          processedBy: clarification.model,
+        });
+      }
+    }
+
+    const actionType = 'tailor_resume' as const;
+    const cost = creditCostForAction(actionType);
+    const chargeKey = String(idempotencyKey || `${userId}:${resumeId}:tailor:${Date.now()}`);
+    await assertCanRunPaidAction({ userId, actionType, cost, idempotencyKey: chargeKey });
+
+    const tailored = await tailorWithGemini({ parsed: sourceParsed, job, answers: normalizedAnswers });
     const { parsed: tailoredParsed, usedSourceFallback } = normalizeResumeJson(
       sourceParsed,
       tailored.tailoredResume && typeof tailored.tailoredResume === 'object' ? tailored.tailoredResume : sourceParsed,
@@ -343,6 +511,7 @@ export async function POST(req: NextRequest) {
     });
 
     return NextResponse.json({
+      needsClarification: false,
       resume: savedResume,
       score: Math.max(0, Math.min(100, Number(tailored.score || 0))),
       summary,

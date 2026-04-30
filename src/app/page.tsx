@@ -34,7 +34,25 @@ type ToolkitConnection = {
   isConnected: boolean;
   connectedAccountId?: string;
 };
+type TailorQuestion = {
+  id: string;
+  question: string;
+  reason: string;
+};
+type TailorAnswer = {
+  questionId: string;
+  question?: string;
+  answer: string;
+};
+type TailorQuestionsPayload = {
+  clarificationId: string;
+  questions: TailorQuestion[];
+  job: JobResult;
+  resume: ResumeContext;
+  jobIndex?: number;
+};
 type TailorResult = {
+  needsClarification?: boolean;
   resume: ResumeContext;
   score: number;
   summary: string;
@@ -59,6 +77,14 @@ function makeTailorResultMessage(result: TailorResult): ChatMessage {
     id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
     role: 'assistant',
     parts: [{ type: 'tailor_result', result } as any],
+  };
+}
+
+function makeTailorQuestionsMessage(payload: TailorQuestionsPayload): ChatMessage {
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    role: 'assistant',
+    parts: [{ type: 'tailor_questions', payload } as any],
   };
 }
 
@@ -164,6 +190,8 @@ export default function Home() {
   const [resumePreviewOpen, setResumePreviewOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [downloadBusy, setDownloadBusy] = useState('');
+  const [tailorQuestionAnswers, setTailorQuestionAnswers] = useState<Record<string, string>>({});
+  const [tailorQuestionBusy, setTailorQuestionBusy] = useState('');
 
   const {
     messages,
@@ -231,7 +259,14 @@ export default function Home() {
     const raw = window.localStorage.getItem('pendingTailorResume');
     if (!raw) return;
     try {
-      const pending = JSON.parse(raw) as { instruction?: string; resume?: ResumeContext; job?: JobResult; jobIndex?: number };
+      const pending = JSON.parse(raw) as {
+        instruction?: string;
+        resume?: ResumeContext;
+        job?: JobResult;
+        jobIndex?: number;
+        answers?: TailorAnswer[];
+        clarificationId?: string;
+      };
       if (!pending.instruction || !pending.resume || !hasCreditsForResumeAction(pending.instruction)) return;
       resumedCheckoutRef.current = true;
       window.localStorage.removeItem('pendingTailorResume');
@@ -240,7 +275,11 @@ export default function Home() {
       setActiveView('chat');
       setInput('');
       if (pending.job) {
-        void runTailorJob(pending.job, pending.resume, pending.jobIndex || 0);
+        void runTailorJob(pending.job, pending.resume, pending.jobIndex || 0, {
+          answers: pending.answers,
+          clarificationId: pending.clarificationId,
+          appendUserMessage: false,
+        });
         return;
       }
       void sendChatMessage(
@@ -600,11 +639,45 @@ export default function Home() {
     return `${job.title || 'role'}-${job.company_name || 'company'}-${index}`;
   }
 
-  async function runTailorJob(job: JobResult, resume: ResumeContext, index = 0) {
+  function tailorAnswerKey(clarificationId: string, questionId: string) {
+    return `${clarificationId}:${questionId}`;
+  }
+
+  function setTailorAnswer(clarificationId: string, questionId: string, answer: string) {
+    setTailorQuestionAnswers(prev => ({
+      ...prev,
+      [tailorAnswerKey(clarificationId, questionId)]: answer,
+    }));
+  }
+
+  async function submitTailorAnswers(payload: TailorQuestionsPayload) {
+    const answers = payload.questions.map(question => ({
+      questionId: question.id,
+      question: question.question,
+      answer: tailorQuestionAnswers[tailorAnswerKey(payload.clarificationId, question.id)] || '',
+    }));
+
+    setTailorQuestionBusy(payload.clarificationId);
+    await runTailorJob(payload.job, payload.resume, payload.jobIndex || 0, {
+      answers,
+      clarificationId: payload.clarificationId,
+      appendUserMessage: false,
+    });
+    setTailorQuestionBusy(current => current === payload.clarificationId ? '' : current);
+  }
+
+  async function runTailorJob(
+    job: JobResult,
+    resume: ResumeContext,
+    index = 0,
+    options: { answers?: TailorAnswer[]; clarificationId?: string; appendUserMessage?: boolean } = {},
+  ) {
     const key = jobTailorKey(job, index);
     setTailoringJobKey(key);
     setActiveView('chat');
-    setMessages(prev => [...prev, makeTextMessage('user', `Tailor my resume for ${job.title || 'this role'}${job.company_name ? ` at ${job.company_name}` : ''}.`)]);
+    if (options.appendUserMessage !== false) {
+      setMessages(prev => [...prev, makeTextMessage('user', `Tailor my resume for ${job.title || 'this role'}${job.company_name ? ` at ${job.company_name}` : ''}.`)]);
+    }
     try {
       const res = await fetch('/api/resume/tailor', {
         method: 'POST',
@@ -613,6 +686,8 @@ export default function Home() {
           userId,
           resumeId: resume.id,
           job,
+          answers: options.answers,
+          clarificationId: options.clarificationId,
           idempotencyKey: makeIdempotencyKey(),
         }),
       });
@@ -624,12 +699,30 @@ export default function Home() {
             job.location ? `Location: ${job.location}.` : '',
             job.description ? `Job description:\n${job.description}` : '',
           ].filter(Boolean).join('\n\n');
-          window.localStorage.setItem('pendingTailorResume', JSON.stringify({ instruction, resume, job, jobIndex: index }));
+          window.localStorage.setItem('pendingTailorResume', JSON.stringify({
+            instruction,
+            resume,
+            job,
+            jobIndex: index,
+            answers: options.answers,
+            clarificationId: options.clarificationId,
+          }));
         }
         openBillingModal('out_of_credits');
         return;
       }
       if (!res.ok) throw new Error(data.error || 'Failed to tailor resume');
+
+      if (data.needsClarification) {
+        setMessages(prev => [...prev, makeTailorQuestionsMessage({
+          clarificationId: data.clarificationId || makeIdempotencyKey(),
+          questions: Array.isArray(data.questions) ? data.questions.slice(0, 3) : [],
+          job,
+          resume,
+          jobIndex: index,
+        })]);
+        return;
+      }
 
       setActiveResume(data.resume);
       setResumePreviewOpen(true);
@@ -654,20 +747,6 @@ export default function Home() {
         ...prev,
         makeTextMessage('assistant', 'Select or upload a resume first, then I can tailor it to this job.'),
       ]);
-      return;
-    }
-
-    const instruction = [
-      `Tailor my active resume for this job: ${job.title || 'Role'} at ${job.company_name || 'Company'}.`,
-      job.location ? `Location: ${job.location}.` : '',
-      job.description ? `Job description:\n${job.description}` : '',
-    ].filter(Boolean).join('\n\n');
-
-    if (billing && !hasCreditsForResumeAction(instruction)) {
-      if (typeof window !== 'undefined') {
-        window.localStorage.setItem('pendingTailorResume', JSON.stringify({ instruction, resume: activeResume, job, jobIndex: index }));
-      }
-      openBillingModal('out_of_credits');
       return;
     }
 
@@ -700,6 +779,49 @@ export default function Home() {
   function renderMessageParts(m: ChatMessage) {
     return m.parts.map((part: any, j: number) => {
       if (part.type === 'text') return <span key={j}>{part.text}</span>;
+      if (part.type === 'tailor_questions' && part.payload) {
+        const payload = part.payload as TailorQuestionsPayload;
+        const isSubmitting = tailorQuestionBusy === payload.clarificationId;
+        return (
+          <div key={j} className="my-3 rounded-xl border border-amber-100 bg-white p-5 shadow-sm">
+            <div>
+              <div className="text-xs font-bold uppercase tracking-wide text-amber-600">A few details first</div>
+              <h3 className="mt-1 text-lg font-bold text-slate-900">
+                {payload.job.title || 'This role'}{payload.job.company_name ? ` at ${payload.job.company_name}` : ''}
+              </h3>
+              <p className="mt-2 text-sm leading-6 text-slate-600">
+                Answer what you know. Blank or uncertain answers will be left out of the tailored copy.
+              </p>
+            </div>
+            <div className="mt-4 space-y-4">
+              {payload.questions.slice(0, 3).map((question, index) => (
+                <label key={question.id} className="block">
+                  <span className="block text-sm font-bold text-slate-900">{index + 1}. {question.question}</span>
+                  {question.reason && <span className="mt-1 block text-xs leading-5 text-slate-500">{question.reason}</span>}
+                  <textarea
+                    value={tailorQuestionAnswers[tailorAnswerKey(payload.clarificationId, question.id)] || ''}
+                    onChange={e => setTailorAnswer(payload.clarificationId, question.id, e.target.value)}
+                    rows={2}
+                    disabled={isSubmitting}
+                    className="mt-2 block w-full resize-y rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm leading-6 text-slate-900 outline-none focus:border-blue-500 disabled:bg-slate-50"
+                    placeholder="Short answer"
+                  />
+                </label>
+              ))}
+            </div>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => submitTailorAnswers(payload)}
+                disabled={isSubmitting}
+                className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-bold text-white hover:bg-slate-800 disabled:opacity-60"
+              >
+                {isSubmitting ? 'Creating...' : 'Create tailored copy'}
+              </button>
+            </div>
+          </div>
+        );
+      }
       if (part.type === 'tailor_result' && part.result) {
         const result = part.result as TailorResult;
         return (
