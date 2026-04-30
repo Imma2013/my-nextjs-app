@@ -163,6 +163,7 @@ export default function Home() {
   const [billingPortalBusy, setBillingPortalBusy] = useState(false);
   const [resumePreviewOpen, setResumePreviewOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [downloadBusy, setDownloadBusy] = useState('');
 
   const {
     messages,
@@ -504,7 +505,16 @@ export default function Home() {
     }
   }
 
-  async function downloadResumePdf(url: string, fallbackName = 'resume.pdf') {
+  function resumeDownloadUrl(resume: ResumeContext) {
+    return `/api/resumes/${encodeURIComponent(resume.id)}/download?userId=${encodeURIComponent(userId)}`;
+  }
+
+  function resumeDownloadName(resume: ResumeContext, fallback = 'resume') {
+    return `${(resume.title || resume.file_name || fallback).replace(/[^\w\s.-]/g, '').replace(/\s+/g, '-').slice(0, 80) || fallback}.pdf`;
+  }
+
+  async function downloadResumePdf(url: string, fallbackName = 'resume.pdf', busyKey = '') {
+    if (busyKey) setDownloadBusy(busyKey);
     try {
       const res = await fetch(url);
       if (!res.ok) {
@@ -525,6 +535,8 @@ export default function Home() {
       await loadBilling();
     } catch (err) {
       setMessages(prev => [...prev, makeTextMessage('assistant', 'Download failed: ' + (err instanceof Error ? err.message : 'Unknown error'))]);
+    } finally {
+      if (busyKey) setDownloadBusy(current => current === busyKey ? '' : current);
     }
   }
 
@@ -717,10 +729,11 @@ export default function Home() {
               </button>
               <button
                 type="button"
-                onClick={() => downloadResumePdf(result.downloadUrl, `${(result.resume.title || 'tailored-resume').replace(/[^\w\s.-]/g, '').replace(/\s+/g, '-')}.pdf`)}
-                className="rounded-lg bg-blue-50 px-4 py-2 text-sm font-bold text-blue-700 hover:bg-blue-100"
+                onClick={() => downloadResumePdf(result.downloadUrl, resumeDownloadName(result.resume, 'tailored-resume'), `tailor-${result.resume.id}`)}
+                disabled={downloadBusy === `tailor-${result.resume.id}`}
+                className="min-w-28 rounded-lg bg-blue-50 px-4 py-2 text-sm font-bold text-blue-700 hover:bg-blue-100 disabled:opacity-60"
               >
-                Download PDF
+                {downloadBusy === `tailor-${result.resume.id}` ? 'Downloading...' : 'Download PDF'}
               </button>
             </div>
           </div>
@@ -1015,7 +1028,17 @@ export default function Home() {
             <b className="block truncate text-sm text-slate-900">Resume Preview</b>
             <span className="text-xs text-slate-500">Click text to edit manually</span>
           </div>
-          <button onClick={() => setResumePreviewOpen(false)} className="rounded-md px-3 py-1.5 text-sm font-bold text-slate-500 hover:bg-slate-100">x</button>
+          <div className="ml-3 flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={() => downloadResumePdf(resumeDownloadUrl(activeResume), resumeDownloadName(activeResume), `preview-${activeResume.id}`)}
+              disabled={downloadBusy === `preview-${activeResume.id}`}
+              className="min-w-28 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-blue-700 disabled:opacity-60"
+            >
+              {downloadBusy === `preview-${activeResume.id}` ? 'Downloading...' : 'Download PDF'}
+            </button>
+            <button onClick={() => setResumePreviewOpen(false)} className="rounded-md px-3 py-1.5 text-sm font-bold text-slate-500 hover:bg-slate-100">x</button>
+          </div>
         </div>
         <div className="app-scroll-region flex-1 bg-slate-100 p-3 sm:p-5">
           <ResumeDocument resume={activeResume} onEdit={handleManualEdit} />
@@ -1153,6 +1176,14 @@ export default function Home() {
                   className={`rounded-lg px-4 py-2 text-xs font-bold ${resumePreviewOpen ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-white text-slate-700 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50'}`}
                 >
                   {resumePreviewOpen ? 'Hide Preview' : 'Resume Preview'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => downloadResumePdf(resumeDownloadUrl(activeResume), resumeDownloadName(activeResume), `header-${activeResume.id}`)}
+                  disabled={downloadBusy === `header-${activeResume.id}`}
+                  className="min-w-28 rounded-lg bg-blue-600 px-4 py-2 text-xs font-bold text-white hover:bg-blue-700 disabled:opacity-60"
+                >
+                  {downloadBusy === `header-${activeResume.id}` ? 'Downloading...' : 'Download PDF'}
                 </button>
                 <button onClick={openResumesDashboard} className="rounded-lg px-4 py-2 text-xs font-bold text-slate-500 hover:bg-slate-100">RESUMES</button>
               </div>
