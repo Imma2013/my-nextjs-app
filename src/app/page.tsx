@@ -12,7 +12,6 @@ import { JobResults } from '@/components/JobResults';
 import { ToolCallDisplay } from '@/components/ToolCallDisplay';
 import type { JobResult, JobSearchPayload } from '@/lib/jobs';
 
-type ChatMessage = UIMessage<{ sessionId?: string }>;
 type ResumeContext = { id: string; title?: string; file_name?: string; summary?: string; candidate_name?: string; headline?: string; preview_url?: string; parsed_json?: any };
 type ChatSession = { id: string; title: string; resumes?: ResumeContext | null };
 type EditPayload = { operation: 'replace' | 'add' | 'remove'; path: string; value?: unknown };
@@ -30,6 +29,14 @@ type BillingSummary = {
   pdfDownloadsUsed?: number;
   pdfDownloadsLimit?: number | null;
 };
+type ChatDataParts = {
+  billing: {
+    billing?: BillingSummary;
+    refresh?: boolean;
+    error?: string;
+  };
+};
+type ChatMessage = UIMessage<{ sessionId?: string }, ChatDataParts>;
 type BillingModalReason = 'out_of_credits' | 'upgrade' | 'topup' | 'billing';
 type ToolkitConnection = {
   slug: string;
@@ -246,6 +253,11 @@ export default function Home() {
     transport: new DefaultChatTransport({ api: '/api/chat' }),
     onError: error => {
       handleChatBillingError(error);
+    },
+    onData: dataPart => {
+      if (dataPart.type !== 'data-billing') return;
+      if (dataPart.data.billing) setBilling(dataPart.data.billing);
+      if (dataPart.data.refresh && userId) void loadBilling(userId);
     },
     onFinish: ({ message }) => {
       const sessionId = message.metadata?.sessionId;

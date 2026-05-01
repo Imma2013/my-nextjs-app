@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import {
   convertToModelMessages,
+  createUIMessageStream,
+  createUIMessageStreamResponse,
   generateId,
   stepCountIs,
   streamText,
@@ -18,6 +20,7 @@ import {
   assertCanRunPaidAction,
   creditCostForAction,
   inferResumeBillingAction,
+  getBillingSummary,
   PaymentRequiredError,
   recordPaidActionSuccess,
 } from '@/lib/billing';
@@ -26,7 +29,16 @@ import { runResumeEdit } from '@/lib/resumeEdit';
 import { RESUME_FACT_SAFETY_RULES } from '@/lib/resumeFacts';
 import { ATS_RESUME_RULES } from '@/lib/resumeAts';
 
-type ChatMessage = UIMessage<{ sessionId?: string }>;
+type BillingSummary = Awaited<ReturnType<typeof getBillingSummary>>;
+type BillingDataPart = {
+  billing?: BillingSummary;
+  refresh?: boolean;
+  error?: string;
+};
+type ChatDataParts = {
+  billing: BillingDataPart;
+};
+type ChatMessage = UIMessage<{ sessionId?: string }, ChatDataParts>;
 
 function client() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -56,6 +68,39 @@ function toolNameFromPart(part: unknown) {
   const typed = part as { type?: unknown; toolName?: unknown };
   if (typeof typed.type === 'string' && typed.type.startsWith('tool-')) return typed.type.slice(5);
   return typeof typed.toolName === 'string' ? typed.toolName : '';
+}
+
+function appendBillingPart(
+  stream: ReadableStream<unknown>,
+  billingPartPromise: Promise<BillingDataPart | null>,
+) {
+  return new ReadableStream({
+    async start(controller) {
+      const reader = stream.getReader();
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          controller.enqueue(value);
+        }
+
+        const billingPart = await billingPartPromise;
+        if (billingPart) {
+          controller.enqueue({
+            type: 'data-billing',
+            data: billingPart,
+            transient: true,
+          });
+        }
+
+        controller.close();
+      } catch (error) {
+        controller.error(error);
+      } finally {
+        reader.releaseLock();
+      }
+    },
+  });
 }
 
 async function insertChatMessage({
@@ -285,39 +330,64 @@ export async function POST(req: NextRequest) {
       maxRetries: 0,
     });
 
-    return result.toUIMessageStreamResponse<ChatMessage>({
+    let resolveBillingPart: (part: BillingDataPart | null) => void = () => {};
+    let billingPartResolved = false;
+    const billingPartPromise = new Promise<BillingDataPart | null>(resolve => {
+      resolveBillingPart = part => {
+        if (billingPartResolved) return;
+        billingPartResolved = true;
+        resolve(part);
+      };
+    });
+
+    const uiStream = result.toUIMessageStream<ChatMessage>({
       originalMessages: messages,
       generateMessageId: () => generateId(),
       messageMetadata: () => (sid ? { sessionId: sid } : undefined),
       onFinish: async ({ responseMessage }) => {
-        const assistantText = textFromMessage(responseMessage);
-        const toolNames = responseMessage.parts.map(toolNameFromPart).filter(Boolean);
-        const usedFreeOrMutatingTool = toolNames.includes('search_jobs') || toolNames.includes('edit_resume');
-        if (userId && sid) {
-          await insertChatMessage({
-            supabase,
-            sessionId: sid,
-            userId,
-            role: 'assistant',
-            content: assistantText,
-            parts: responseMessage.parts,
-          });
-        }
-        if (userId && shouldChargeChatReply && !usedFreeOrMutatingTool) {
-          try {
-            await recordPaidActionSuccess({
+        try {
+          const assistantText = textFromMessage(responseMessage);
+          const toolNames = responseMessage.parts.map(toolNameFromPart).filter(Boolean);
+          const usedFreeOrMutatingTool = toolNames.includes('search_jobs') || toolNames.includes('edit_resume');
+          if (userId && sid) {
+            await insertChatMessage({
+              supabase,
+              sessionId: sid,
               userId,
-              actionType: chatActionType,
-              cost: chatActionCost,
-              idempotencyKey: chatChargeKey,
-              resumeId: resumeId || null,
+              role: 'assistant',
+              content: assistantText,
+              parts: responseMessage.parts,
             });
-          } catch (error) {
-            console.error('Failed to record chat AI action:', error);
           }
+          if (userId && shouldChargeChatReply && !usedFreeOrMutatingTool) {
+            try {
+              await recordPaidActionSuccess({
+                userId,
+                actionType: chatActionType,
+                cost: chatActionCost,
+                idempotencyKey: chatChargeKey,
+                resumeId: resumeId || null,
+              });
+              resolveBillingPart({ billing: await getBillingSummary(userId) });
+            } catch (error) {
+              console.error('Failed to record chat AI action:', error);
+              resolveBillingPart({ refresh: true, error: 'billing_record_failed' });
+            }
+          }
+        } finally {
+          resolveBillingPart(null);
         }
       },
     });
+
+    const stream = createUIMessageStream<ChatMessage>({
+      execute: ({ writer }) => {
+        writer.merge(appendBillingPart(uiStream, billingPartPromise) as ReadableStream<any>);
+      },
+      onError: error => geminiUserError(error) || (error instanceof Error ? error.message : 'An error occurred.'),
+    });
+
+    return createUIMessageStreamResponse({ stream });
   } catch (e: unknown) {
     console.error(e);
     if (e instanceof PaymentRequiredError) {
