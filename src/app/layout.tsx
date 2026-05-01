@@ -5,8 +5,8 @@ import './globals.css';
 const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: 'Resume Optimizer',
-  description: 'AI-powered resume optimizer — tailor your resume to any job description',
+  title: 'Cryzo',
+  description: 'Cryzo is an AI-powered resume optimizer that tailors your resume to any job description',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

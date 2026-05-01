@@ -1066,7 +1066,7 @@ export default function Home() {
       ? 'Manage billing'
       : billingModalReason === 'topup'
         ? 'Add AI actions'
-        : 'Upgrade Resume AI';
+        : 'Upgrade Cryzo';
   const paidPlan = billing?.plan === 'pro_monthly' || billing?.plan === 'pro_plus_monthly';
   const tailorButtonText = `Tailor resume - ${formatActions(AI_ACTION_COSTS.tailor_resume)} AI action`;
   const billingModal = billingModalOpen && (
@@ -1347,8 +1347,8 @@ export default function Home() {
       <aside className={`fixed inset-y-0 left-0 z-40 flex w-72 shrink-0 flex-col gap-4 overflow-hidden bg-[#332071] px-4 py-4 text-white shadow-2xl transition-transform duration-200 md:static md:w-64 md:shadow-none ${sidebarOpen ? 'translate-x-0' : '-translate-x-full md:hidden'}`}>
         <div className="flex items-center justify-between gap-3 px-1">
           <div className="flex min-w-0 items-center gap-3">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-fuchsia-500 font-bold">R</div>
-            <span className="truncate text-base font-bold">Resume AI</span>
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-fuchsia-500 font-bold">C</div>
+            <span className="truncate text-base font-bold">Cryzo</span>
           </div>
           <button onClick={() => setSidebarOpen(false)} className="rounded-md px-2 py-1 text-sm font-bold text-white/70 hover:bg-white/10 hover:text-white">Close</button>
         </div>
