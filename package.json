@@ -13,7 +13,7 @@
     "@ai-sdk/react": "^3.0.170",
     "@composio/core": "^0.8.0",
     "@composio/vercel": "^0.8.0",
-    "@sparticuz/chromium": "^123.0.1",
+    "@sparticuz/chromium": "^147.0.2",
     "@supabase/supabase-js": "^2.45.0",
     "ai": "^6.0.168",
     "firebase": "^12.12.1",

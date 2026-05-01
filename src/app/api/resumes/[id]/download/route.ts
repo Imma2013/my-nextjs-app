@@ -16,26 +16,61 @@ async function executablePath() {
     || await chromium.executablePath();
 }
 
+function sanitizedPath(value: string) {
+  let sanitized = value.replace(process.cwd(), '<app>');
+  if (process.env.HOME) sanitized = sanitized.replace(process.env.HOME, '<home>');
+  return sanitized;
+}
+
+function logPdfPhase(phase: string, details?: Record<string, unknown>) {
+  console.info('[resume-pdf]', { phase, ...details });
+}
+
+function logPdfError(phase: string, error: unknown) {
+  console.error('[resume-pdf]', { phase, error });
+}
+
 async function renderResumePdf(url: string) {
-  const browser = await puppeteer.launch({
-    args: chromium.args,
-    defaultViewport: { width: 850, height: 1100, deviceScaleFactor: 1 },
-    executablePath: await executablePath(),
-    headless: chromium.headless,
-  });
+  let phase = 'resolve-executable';
+  let browser;
 
   try {
+    const browserExecutablePath = await executablePath();
+    logPdfPhase(phase, {
+      executablePath: sanitizedPath(browserExecutablePath),
+    });
+
+    phase = 'launch-browser';
+    browser = await puppeteer.launch({
+      args: puppeteer.defaultArgs({ args: chromium.args, headless: 'shell' }),
+      defaultViewport: { width: 850, height: 1100, deviceScaleFactor: 1 },
+      executablePath: browserExecutablePath,
+      headless: 'shell',
+    });
+
+    phase = 'new-page';
     const page = await browser.newPage();
-    await page.goto(url, { waitUntil: 'networkidle0', timeout: 45000 });
+
+    phase = 'navigate';
+    logPdfPhase(phase, { url });
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+    await page.waitForSelector('.resume-document', { timeout: 15000 });
+
+    phase = 'pdf';
     await page.emulateMediaType('screen');
-    return await page.pdf({
+    const pdf = await page.pdf({
       format: 'letter',
       printBackground: true,
       preferCSSPageSize: true,
       margin: { top: '0', right: '0', bottom: '0', left: '0' },
     });
+    logPdfPhase('complete', { bytes: pdf.length });
+    return pdf;
+  } catch (error) {
+    logPdfError(phase, error);
+    throw error;
   } finally {
-    await browser.close();
+    if (browser) await browser.close();
   }
 }
 
