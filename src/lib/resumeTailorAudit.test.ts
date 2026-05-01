@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { validateAtsResume } from './resumeAts';
+import { normalizeAtsResume, reviewAtsResume, validateAtsResume } from './resumeAts';
 import { auditTailoredResume, canonicalizeTailoredResume, hasVisibleTailoringDiff } from './resumeTailorAudit';
 
 const job = {
@@ -8,6 +8,66 @@ const job = {
   company_name: 'Chick-fil-A',
   description: 'Lead restaurant operations, scheduling, guest service, team coordination, communication, and food service experience.',
 };
+
+test('ATS cleanup normalizes Till Date to Present', () => {
+  const normalized = normalizeAtsResume({
+    experience: [{ role: 'Team Member', company: 'Six Flags', dates: 'June 2024 - Till Date', bullets: [] }],
+  });
+
+  assert.equal(normalized.experience[0].dates, 'June 2024 - Present');
+});
+
+test('ATS cleanup removes editor artifacts from skills', () => {
+  const normalized = normalizeAtsResume({ skills: ['+ skill', '+ JavaScript'] });
+
+  assert.deepEqual(normalized.skills, ['skill', 'JavaScript']);
+});
+
+test('ATS cleanup fixes known employer and school capitalization', () => {
+  const normalized = normalizeAtsResume({
+    experience: [{ role: 'Lead', company: 'Six flags', bullets: [] }],
+    education: [{ school: 'middle school' }],
+  });
+
+  assert.equal(normalized.experience[0].company, 'Six Flags');
+  assert.equal(normalized.education[0].school, 'Middle School');
+});
+
+test('ATS cleanup formats community service entries without losing facts', () => {
+  const normalized = normalizeAtsResume({
+    sections: {
+      'community service': ['Tutor - Local Library - 2023 - Helped students with homework.'],
+    },
+  });
+
+  assert.deepEqual(normalized.communityService[0], {
+    role: 'Tutor',
+    organization: 'Local Library',
+    dates: '2023',
+    bullets: ['Helped students with homework.'],
+  });
+});
+
+test('ATS review keeps unsupported job keywords out and reports them missing', () => {
+  const resume = {
+    experience: [{ role: 'Cashier', bullets: ['Helped customers and organized inventory.'] }],
+    skills: ['Customer service'],
+  };
+  const reviewed = reviewAtsResume(resume, 'Requires Microsoft Excel and Salesforce.');
+  const visibleText = JSON.stringify(normalizeAtsResume(resume));
+
+  assert.doesNotMatch(visibleText, /Microsoft Excel|Salesforce/i);
+  assert.ok(reviewed.missingKeywords.includes('Microsoft Excel'));
+  assert.ok(reviewed.missingKeywords.includes('Salesforce'));
+});
+
+test('ATS cleanup preserves uncertain project casing', () => {
+  const normalized = normalizeAtsResume({
+    projects: [{ title: 'ATProtocol demo', bullets: ['Built a prototype.'] }],
+  });
+
+  assert.equal(normalized.projects[0].title, 'ATProtocol demo');
+});
 
 test('canonicalization promotes rewritten hidden fields into visible bullets', () => {
   const source = {

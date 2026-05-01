@@ -3,6 +3,7 @@ import { PDFExtract } from 'pdf.js-extract';
 import mammoth from 'mammoth';
 import { createClient } from '@supabase/supabase-js';
 import { generateGeminiContent, geminiUserError } from '@/lib/gemini';
+import { normalizeAtsResume } from '@/lib/resumeAts';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder.supabase.co';
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || 'placeholder';
@@ -58,7 +59,7 @@ Return this exact structure:
       },
     });
     const parsedText = data.candidates?.[0]?.content?.parts?.[0]?.text ?? '{}';
-    const parsed = JSON.parse(parsedText.replace(/```json|```/g, '').trim());
+    const parsed = normalizeAtsResume(JSON.parse(parsedText.replace(/```json|```/g, '').trim()));
 
     // Create resume in DB
     const { data: resume, error: resumeError } = await supabase

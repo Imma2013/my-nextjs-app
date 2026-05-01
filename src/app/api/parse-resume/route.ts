@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { generateGeminiContent, geminiUserError } from '@/lib/gemini';
+import { normalizeAtsResume, reviewAtsResume } from '@/lib/resumeAts';
 
 const MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024;
 
@@ -99,7 +100,9 @@ Rules:
     });
 
     const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text ?? '{}';
-    const parsed = JSON.parse(cleanGeminiJson(rawText));
+    const parsedRaw = JSON.parse(cleanGeminiJson(rawText));
+    const parsed = normalizeAtsResume(parsedRaw);
+    const atsReview = reviewAtsResume(parsedRaw);
     const text = typeof parsed.resumeText === 'string' ? parsed.resumeText.trim() : typeof parsed.text === 'string' ? parsed.text.trim() : '';
 
     if (!text) {
@@ -113,6 +116,7 @@ Rules:
       candidateName: typeof parsed.candidateName === 'string' ? parsed.candidateName : '',
       headline: typeof parsed.headline === 'string' ? parsed.headline : '',
       issues: Array.isArray(parsed.issues) ? parsed.issues : [],
+      atsReview,
       fileName: file.name,
       mimeType,
       processedBy: model,

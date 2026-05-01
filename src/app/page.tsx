@@ -59,6 +59,7 @@ type TailorResult = {
   improvements: string[];
   matchedKeywords?: string[];
   missingKeywords?: string[];
+  atsSummary?: string;
   downloadUrl: string;
   billing?: unknown;
   processedBy?: string;
@@ -871,6 +872,7 @@ export default function Home() {
                 {result.improvements.slice(0, 4).map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}
               </ul>
             )}
+            {result.atsSummary && <p className="mt-4 whitespace-pre-line rounded-lg bg-slate-50 p-3 text-sm leading-6 text-slate-600">{result.atsSummary}</p>}
             {!!result.matchedKeywords?.length && (
               <div className="mt-4">
                 <div className="text-xs font-bold uppercase tracking-wide text-slate-400">Matched keywords</div>

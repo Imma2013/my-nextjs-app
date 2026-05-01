@@ -149,7 +149,7 @@ export async function POST(req: NextRequest) {
         console.error('Failed to load active resume context:', err);
       }
 
-      systemPrompt += `\n\nThe user has an active resume (ID: ${resumeId}). When the user asks you to make changes to their resume, you MUST use the edit_resume tool. Pass resume_id as "${resumeId}" and provide a clear natural-language instruction. When tailoring the resume to a job, use the job title, company, and description to update the resume for ATS relevance while following these constraints:\n${RESUME_FACT_SAFETY_RULES}\n\n${ATS_RESUME_RULES}`;
+      systemPrompt += `\n\nThe user has an active resume (ID: ${resumeId}). When the user asks you to make changes to their resume, you MUST use the edit_resume tool. Pass resume_id as "${resumeId}" and provide a clear natural-language instruction. For broad requests like "make this ATS friendly", update structure and wording conservatively, then summarize what was fixed and what still needs confirmation. Safe ATS cleanup is automatic unless the user explicitly says not to. When tailoring the resume to a job, use the job title, company, and description to update the resume for ATS relevance while following these constraints:\n${RESUME_FACT_SAFETY_RULES}\n\n${ATS_RESUME_RULES}`;
     }
 
     const session = await composio.create(userId || 'anonymous');
@@ -190,6 +190,7 @@ export async function POST(req: NextRequest) {
               success: Boolean(result.resume),
               reply: result.reply || 'Resume updated successfully',
               resume: result.resume,
+              atsReview: result.atsReview,
               billing: result.billing,
               processedBy: result.processedBy,
             };

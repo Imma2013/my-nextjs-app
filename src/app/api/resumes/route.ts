@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getBillingSummary } from '@/lib/billing';
+import { formatAtsReviewSummary, normalizeAtsResume, reviewAtsResume } from '@/lib/resumeAts';
 
 const BUCKET = 'resume-files';
 
@@ -113,7 +114,9 @@ export async function POST(req: NextRequest) {
     const parsedData = await parsedRes.json();
     if (!parsedRes.ok) return NextResponse.json(parsedData, { status: parsedRes.status });
 
-    const parsed = parsedData.parsed || {};
+    const parsedRaw = parsedData.parsed || {};
+    const parsed = normalizeAtsResume(parsedRaw);
+    const atsReview = parsedData.atsReview || reviewAtsResume(parsedRaw);
     const candidateName = parsedData.candidateName || parsed.candidateName || '';
     const title = candidateName ? `${candidateName}'s Resume` : file.name.replace(/\.(pdf|docx)$/i, '') || 'Uploaded Resume';
     const rawText = parsedData.text || parsed.resumeText || '';
@@ -175,7 +178,14 @@ export async function POST(req: NextRequest) {
       session = (await sessionRes.json())?.[0];
     }
 
-    return NextResponse.json({ resume, session, sessionId: session.id, message: `I received ${file.name} and saved it as resume context. ${resume.summary || ''}`.trim() });
+    const atsSummary = formatAtsReviewSummary(atsReview);
+    return NextResponse.json({
+      resume,
+      session,
+      sessionId: session.id,
+      atsReview,
+      message: [`I received ${file.name} and saved it as resume context. ${resume.summary || ''}`.trim(), atsSummary].filter(Boolean).join('\n'),
+    });
   } catch (e) {
     console.error(e);
     return NextResponse.json({ error: e instanceof Error ? e.message : 'Failed to save resume' }, { status: 500 });

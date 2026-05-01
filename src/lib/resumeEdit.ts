@@ -9,7 +9,7 @@ import {
 } from '@/lib/billing';
 import { generateGeminiContent } from '@/lib/gemini';
 import { RESUME_FACT_SAFETY_RULES } from '@/lib/resumeFacts';
-import { ATS_RESUME_RULES } from '@/lib/resumeAts';
+import { ATS_RESUME_RULES, formatAtsReviewSummary, normalizeAtsResume, reviewAtsResume, type AtsReviewResult } from '@/lib/resumeAts';
 
 export type EditOp = { operation?: 'replace' | 'add' | 'remove'; path: string; value?: unknown };
 
@@ -29,6 +29,7 @@ export type ResumeEditResult = {
   resume?: unknown;
   reply: string;
   operations?: EditOp[];
+  atsReview?: AtsReviewResult;
   billing?: unknown;
   processedBy?: string;
 };
@@ -186,9 +187,9 @@ Allowed paths include:
 - volunteering.0.organization, volunteering.0.role, volunteering.0.bullets.0
 - education.0.degree, awards.0, certifications.0
 
-For broad requests like "tailor my resume", make conservative, fact-safe edits only: headline, summary/profile, skills ordering, and rewritten preview-visible bullets that highlight honest transferable skills. Never convert customer service, retail, cart handling, volunteer, or operations work into software engineering or technical infrastructure work.
+For broad requests like "tailor my resume" or "make this ATS friendly", make conservative, fact-safe edits only: headline, summary/profile, skills ordering, standard section structure, and rewritten preview-visible bullets that highlight honest transferable skills. Never convert customer service, retail, cart handling, volunteer, or operations work into software engineering or technical infrastructure work.
 For tailoring, every rewritten experience, project, volunteer, volunteering, or community-service item MUST be saved into its preview-visible bullets array. Do not place rewritten text in highlights, details, description, or any new hidden field.
-For ATS safety, keep edits one-column, plain-text, standard-section friendly, PDF-copyable, and free of tables, images, icons, decorative symbols, hidden text, and keyword stuffing. Keep unsupported job keywords out of summary, skills, and bullets.
+For ATS safety, keep edits one-column, plain-text, standard-section friendly, PDF-copyable, and free of tables, images, icons, decorative symbols, hidden text, and keyword stuffing. Safe ATS cleanup is automatic unless the user explicitly says not to: normalize dates like Till Date to Present, remove editor artifacts like "+ skill", fix obvious known employer/school/section capitalization, and format community service like experience when role/org/date content is present. Keep uncertain brand or project casing unchanged, and keep unsupported job keywords out of summary, skills, and bullets.
 Preserve candidate identity, existing employers, job titles, dates, education, awards, certifications, and project names unless the user explicitly requests changing those exact fields.
 If user clarification answers are included in the request, treat specific non-blank answers as confirmed facts for this edited resume copy only. Ignore blank, skipped, uncertain, "not sure", and "I don't know" answers.
 
@@ -221,7 +222,7 @@ Request: ${message}`;
 }
 
 export function applyResumeEditOperations(parsedInput: any, operations: EditOp[]) {
-  return operations.reduce((parsed, op) => applyResumeEditOperation(parsed, op), copy(parsedInput));
+  return normalizeAtsResume(operations.reduce((parsed, op) => applyResumeEditOperation(parsed, op), copy(parsedInput)));
 }
 
 export async function saveResumeParsedJson({
@@ -237,7 +238,7 @@ export async function saveResumeParsedJson({
 }) {
   const saved = await supabase
     .from('resumes')
-    .update({ parsed_json: parsed, candidate_name: parsed.candidateName || parsed.name || null, headline: parsed.headline || parsed.title || null })
+    .update({ parsed_json: normalizeAtsResume(parsed), candidate_name: parsed.candidateName || parsed.name || null, headline: parsed.headline || parsed.title || null })
     .eq('id', resumeId)
     .eq('user_id', userId)
     .select('*')
@@ -290,8 +291,11 @@ export async function runResumeEdit({
   if (!operations.length && value) operations = [{ operation: 'replace', path: 'experience.0.role', value }];
   if (!operations.length) return { handled: false, reply: 'I understood that as chat, not a saved resume edit.' };
 
-  parsed = applyResumeEditOperations(parsed, operations);
+  const editedRaw = operations.reduce((current, op) => applyResumeEditOperation(current, op), copy(parsed));
+  const atsReview = reviewAtsResume(editedRaw, String(message || value || ''));
+  parsed = normalizeAtsResume(editedRaw);
   ensureFirstExperience(parsed);
+  parsed = normalizeAtsResume(parsed);
 
   const saved = await supabase
     .from('resumes')
@@ -318,10 +322,13 @@ export async function runResumeEdit({
   }
 
   const count = operations.length;
+  const atsSummary = formatAtsReviewSummary(atsReview);
+  const baseReply = reply || `Saved ${count} resume edit${count === 1 ? '' : 's'}. You should see the preview update now.`;
   return {
     resume: saved.data,
-    reply: reply || `Saved ${count} resume edit${count === 1 ? '' : 's'}. You should see the preview update now.`,
+    reply: atsSummary ? `${baseReply}\n${atsSummary}` : baseReply,
     operations,
+    atsReview,
     billing,
     processedBy,
   };

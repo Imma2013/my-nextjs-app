@@ -8,7 +8,7 @@ import {
 } from '@/lib/billing';
 import { generateGeminiContent, geminiUserError } from '@/lib/gemini';
 import { RESUME_FACT_SAFETY_RULES } from '@/lib/resumeFacts';
-import { ATS_RESUME_RULES, validateAtsResume } from '@/lib/resumeAts';
+import { ATS_RESUME_RULES, formatAtsReviewSummary, normalizeAtsResume, reviewAtsResume } from '@/lib/resumeAts';
 import { auditTailoredResume, canonicalVisibleBullets, canonicalizeTailoredResume, hasVisibleTailoringDiff } from '@/lib/resumeTailorAudit';
 import { runResumeEdit } from '@/lib/resumeEdit';
 
@@ -81,12 +81,12 @@ function defaultClarificationQuestions(job: TailorJob): TailorQuestion[] {
   return [
     {
       id: 'relevant_experience',
-      question: `Which role-specific keywords or requirements from ${role} are already proven by your resume or personal experience?`,
+      question: `Which role-specific keywords or requirements from ${role} are already proven by your resume or personal experience, and which exact tools did you use?`,
       reason: 'Confirmed keywords can be used safely; unsupported ones should stay out of the resume copy.',
     },
     {
       id: 'confirmed_tools',
-      question: 'Which exact job-required tools, systems, certifications, or credentials have you personally used or earned?',
+      question: 'Which job-required certifications, credentials, full LinkedIn/GitHub/portfolio URLs, or project/community-service details can you confirm?',
       reason: 'Exact tools and credentials improve ATS matching only when they are factual.',
     },
     {
@@ -445,8 +445,9 @@ Inspect the resume facts and target job before resume tailoring. Return exactly 
 Rules:
 - Ask exactly 3 short-answer questions.
 - Ask only for facts that materially affect tailoring and are not already proven by the resume.
-- Ask about missing role-specific keywords, exact tools used, measurable results, certifications or credentials, and confirmed transferable skills when they materially affect the job match.
-- For frontend, web design, software engineering, full-stack, or technical jobs, prioritize project facts such as alu.pics stack, frontend features, backend/API/database/auth/deployment, and what the user personally built.
+- Ask about missing role-specific keywords, exact tools used, measurable results, certifications or credentials, full LinkedIn/GitHub/portfolio URLs, and confirmed transferable skills when they materially affect the job match.
+- For frontend, web design, software engineering, full-stack, or technical jobs, prioritize project facts such as project stack, frontend features, backend/API/database/auth/deployment, full URLs, and what the user personally built.
+- Ask whether project or community-service details can be expanded when those sections could honestly support the target role.
 - For non-technical jobs, ask no technical questions; ask about directly relevant service, operations, communication, sales, leadership, scheduling, safety, or customer-support facts as appropriate.
 - Even if the resume already provides enough honest support for the role, still ask 3 optional questions that could safely improve the tailored copy.
 - Do not ask for unrelated metrics, tools, responsibilities, or credentials unless the job materially depends on them.
@@ -540,7 +541,7 @@ export async function POST(req: NextRequest) {
       .single();
     if (sourceError) throw sourceError;
 
-    const sourceParsed = enrichExperienceFromRawText(sourceResume.parsed_json || {}, sourceResume.raw_text || sourceResume.content);
+    const sourceParsed = normalizeAtsResume(enrichExperienceFromRawText(sourceResume.parsed_json || {}, sourceResume.raw_text || sourceResume.content));
     const normalizedAnswers = normalizeAnswers(answers);
 
     if (!clarificationId) {
@@ -635,15 +636,17 @@ export async function POST(req: NextRequest) {
       normalized.usedSourceFallback = true;
     }
 
-    const atsValidation = validateAtsResume(audited.parsed, job.description || [job.title, job.company_name].filter(Boolean).join('\n'));
+    const reviewedParsed = normalizeAtsResume(audited.parsed);
+    const atsReview = reviewAtsResume(audited.parsed, job.description || [job.title, job.company_name].filter(Boolean).join('\n'));
     const missingKeywords = Array.from(new Set([
       ...audited.missingKeywords,
-      ...atsValidation.missingKeywords,
+      ...atsReview.missingKeywords,
     ])).slice(0, 8);
 
-    const tailoredParsed = audited.parsed;
+    const tailoredParsed = reviewedParsed;
     const content = JSON.stringify(tailoredParsed);
     const summary = audited.summary;
+    const atsSummary = formatAtsReviewSummary({ ...atsReview, missingKeywords });
 
     const { data: savedResume, error: saveError } = await supabase
       .from('resumes')
@@ -677,6 +680,7 @@ export async function POST(req: NextRequest) {
       improvements: audited.improvements,
       matchedKeywords: audited.matchedKeywords,
       missingKeywords,
+      atsSummary,
       downloadUrl: `/api/resumes/${encodeURIComponent(savedResume.id)}/download?userId=${encodeURIComponent(userId)}`,
       billing,
       processedBy: editResult.processedBy,
