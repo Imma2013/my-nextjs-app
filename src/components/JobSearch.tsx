@@ -4,7 +4,15 @@ import React, { useState } from 'react';
 import { JobResults } from './JobResults';
 import type { JobResult } from '@/lib/jobs';
 
-export default function JobSearch() {
+export default function JobSearch({
+  onTailorResume,
+  tailorButtonLabel,
+  tailoringJobKey,
+}: {
+  onTailorResume?: (job: JobResult, index: number) => void;
+  tailorButtonLabel?: string;
+  tailoringJobKey?: string;
+}) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<JobResult[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -71,7 +79,13 @@ export default function JobSearch() {
 
         {!!results.length && (
           <div className="max-w-4xl">
-            <JobResults query={query} jobs={results} />
+            <JobResults
+              query={query}
+              jobs={results}
+              onTailorResume={onTailorResume}
+              tailorButtonLabel={tailorButtonLabel}
+              tailoringJobKey={tailoringJobKey}
+            />
           </div>
         )}
       </div>

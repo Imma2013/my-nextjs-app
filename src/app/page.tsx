@@ -7,6 +7,7 @@ import { signInWithPopup, signInWithEmailAndPassword, createUserWithEmailAndPass
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport, getToolName, isToolUIPart, type UIMessage } from 'ai';
 import ResumeDocument from '@/components/ResumeDocument';
+import JobSearch from '@/components/JobSearch';
 import { JobResults } from '@/components/JobResults';
 import { ToolCallDisplay } from '@/components/ToolCallDisplay';
 import type { JobResult, JobSearchPayload } from '@/lib/jobs';
@@ -15,7 +16,7 @@ type ChatMessage = UIMessage<{ sessionId?: string }>;
 type ResumeContext = { id: string; title?: string; file_name?: string; summary?: string; candidate_name?: string; headline?: string; preview_url?: string; parsed_json?: any };
 type ChatSession = { id: string; title: string; resumes?: ResumeContext | null };
 type EditPayload = { operation: 'replace' | 'add' | 'remove'; path: string; value?: unknown };
-type AppView = 'chat' | 'resumes' | 'apps';
+type AppView = 'chat' | 'jobs' | 'resumes' | 'apps';
 type BillingSummary = {
   credits: number;
   plan: string;
@@ -371,6 +372,13 @@ export default function Home() {
     setActiveResume(null);
     setResumePreviewOpen(false);
     loadResumes();
+    closeSidebarOnMobile();
+  }
+
+  function openJobSearchDashboard() {
+    setActiveView('jobs');
+    setActiveResume(null);
+    setResumePreviewOpen(false);
     closeSidebarOnMobile();
   }
 
@@ -969,7 +977,7 @@ export default function Home() {
   const authModal = showAuthModal && (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm">
       <div className="relative w-full max-w-md rounded-xl bg-white p-8 shadow-2xl">
-        <button onClick={() => setShowAuthModal(false)} className="absolute right-4 top-4 text-slate-400 hover:text-slate-600">x</button>
+        <button onClick={() => setShowAuthModal(false)} className="absolute right-4 top-4 text-sm font-bold text-slate-400 hover:text-slate-600">Close</button>
         <h1 className="mb-6 text-center text-2xl font-bold text-slate-900">Sign in to Continue</h1>
         <form onSubmit={handleAuth} className="flex flex-col gap-4">
           <input type="email" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} className="rounded-md border p-3 text-slate-900 outline-none focus:border-blue-500" required />
@@ -1002,7 +1010,7 @@ export default function Home() {
   const billingModal = billingModalOpen && (
     <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-900/50 p-4 backdrop-blur-sm">
       <div className="relative my-auto w-full max-w-3xl rounded-xl bg-white shadow-2xl">
-        <button onClick={() => setBillingModalOpen(false)} className="absolute right-4 top-4 z-10 text-slate-400 hover:text-slate-600">x</button>
+        <button onClick={() => setBillingModalOpen(false)} className="absolute right-4 top-4 z-10 text-sm font-bold text-slate-400 hover:text-slate-600">Close</button>
         <div className="max-h-[calc(100vh-2rem)] overflow-y-auto p-5 sm:p-7">
           <div className="pr-8">
             <h2 className="text-xl font-bold text-slate-900 sm:text-2xl">{billingModalTitle}</h2>
@@ -1215,7 +1223,7 @@ export default function Home() {
             >
               {downloadBusy === `preview-${activeResume.id}` ? 'Downloading...' : 'Download PDF'}
             </button>
-            <button onClick={() => setResumePreviewOpen(false)} className="rounded-md px-3 py-1.5 text-sm font-bold text-slate-500 hover:bg-slate-100">x</button>
+            <button onClick={() => setResumePreviewOpen(false)} className="rounded-md px-3 py-1.5 text-sm font-bold text-slate-500 hover:bg-slate-100">Close</button>
           </div>
         </div>
         <div className="app-scroll-region flex-1 bg-slate-100 p-3 sm:p-5">
@@ -1237,7 +1245,7 @@ export default function Home() {
             </h2>
             <p className="mt-1 text-sm leading-6 text-slate-600">Select the saved resume to use as the source. A new tailored copy will be created.</p>
           </div>
-          <button onClick={() => setPendingTailorSelection(null)} className="shrink-0 rounded-md px-3 py-1.5 text-sm font-bold text-slate-500 hover:bg-slate-100">x</button>
+          <button onClick={() => setPendingTailorSelection(null)} className="shrink-0 rounded-md px-3 py-1.5 text-sm font-bold text-slate-500 hover:bg-slate-100">Close</button>
         </div>
 
         <div className="app-scroll-region min-h-0 flex-1 space-y-3 overflow-y-auto p-5">
@@ -1290,19 +1298,19 @@ export default function Home() {
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-fuchsia-500 font-bold">R</div>
             <span className="truncate text-base font-bold">Resume AI</span>
           </div>
-          <button onClick={() => setSidebarOpen(false)} className="rounded-md px-2 py-1 text-sm font-bold text-white/70 hover:bg-white/10 hover:text-white">x</button>
+          <button onClick={() => setSidebarOpen(false)} className="rounded-md px-2 py-1 text-sm font-bold text-white/70 hover:bg-white/10 hover:text-white">Close</button>
         </div>
         <div className="flex flex-col gap-2">
-          <button onClick={newChat} className="flex items-center gap-3 rounded-lg bg-white/15 p-3 text-sm font-bold hover:bg-white/25"><span>+</span> New Chat</button>
-          <button onClick={openResumesDashboard} className={`flex items-center gap-3 rounded-lg p-3 text-sm hover:bg-white/10 ${activeView === 'resumes' ? 'bg-white/20 font-bold' : ''}`}><span>[]</span> Resumes / CVs</button>
-          <button onClick={openAppsDashboard} className={`flex items-center gap-3 rounded-lg p-3 text-sm hover:bg-white/10 ${activeView === 'apps' ? 'bg-white/20 font-bold' : ''}`}><span>*</span> Apps</button>
+          <button onClick={openJobSearchDashboard} className={`rounded-lg p-3 text-left text-sm hover:bg-white/10 ${activeView === 'jobs' ? 'bg-white/20 font-bold' : ''}`}>Job Search</button>
+          <button onClick={newChat} className={`rounded-lg p-3 text-left text-sm hover:bg-white/10 ${activeView === 'chat' ? 'bg-white/15 font-bold hover:bg-white/25' : ''}`}>AI Chat</button>
+          <button onClick={openResumesDashboard} className={`rounded-lg p-3 text-left text-sm hover:bg-white/10 ${activeView === 'resumes' ? 'bg-white/20 font-bold' : ''}`}>Resumes / CVs</button>
+          <button onClick={openAppsDashboard} className={`rounded-lg p-3 text-left text-sm hover:bg-white/10 ${activeView === 'apps' ? 'bg-white/20 font-bold' : ''}`}>Apps</button>
         </div>
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <div className="mb-2 px-2 text-xs font-bold text-white/50">CHAT HISTORY</div>
           <div className="app-scroll-region custom-scrollbar flex-1 space-y-1 pb-2">
             {userId && sessions.map(s => (
-              <button key={s.id} title={s.title} onClick={() => loadChat(s.id)} className={`flex w-full items-center gap-3 rounded-lg p-3 text-left text-sm hover:bg-white/10 ${activeSessionId === s.id ? 'bg-white/20 font-bold' : ''}`}>
-                <span>-</span>
+              <button key={s.id} title={s.title} onClick={() => loadChat(s.id)} className={`flex w-full items-center rounded-lg p-3 text-left text-sm hover:bg-white/10 ${activeSessionId === s.id ? 'bg-white/20 font-bold' : ''}`}>
                 <span className="truncate">{s.title}</span>
               </button>
             ))}
@@ -1312,8 +1320,8 @@ export default function Home() {
         </div>
         {userId && (
           <div className="mt-auto border-t border-white/10 pt-4">
-            <button onClick={() => signOut(auth)} className="flex w-full items-center gap-3 rounded-lg p-3 text-sm font-bold hover:bg-red-500/20" title="Sign Out">
-              <span>&gt;</span> Sign Out
+            <button onClick={() => signOut(auth)} className="flex w-full items-center rounded-lg p-3 text-sm font-bold hover:bg-red-500/20" title="Sign out">
+              Sign out
             </button>
           </div>
         )}
@@ -1326,13 +1334,19 @@ export default function Home() {
           {!userId ? (
             <button onClick={() => setShowAuthModal(true)} className="rounded-md bg-blue-600 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-blue-700">SIGN IN</button>
           ) : (
-            <button onClick={() => signOut(auth)} className="rounded-md bg-slate-200 px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-300">SIGN OUT</button>
+            <button onClick={() => signOut(auth)} className="rounded-md bg-slate-200 px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-300">Sign out</button>
           )}
         </header>
 
         {!activeResume ? (
           activeView === 'apps' ? (
             connectionsDashboard
+          ) : activeView === 'jobs' ? (
+            <JobSearch
+              onTailorResume={tailorResume}
+              tailorButtonLabel={billing?.freeTailorAvailable ? 'Tailor resume - Free' : 'Tailor resume - 1 credit'}
+              tailoringJobKey={tailoringJobKey}
+            />
           ) : activeView === 'resumes' ? (
             <section className="mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col overflow-hidden px-4 py-6 sm:px-6">
               <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
