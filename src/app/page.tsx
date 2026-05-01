@@ -194,6 +194,11 @@ function looksLikeTailorRequest(text: string) {
   return /\btailor\b|\btarget\b|\bats\b|\bjob description\b/i.test(text);
 }
 
+function isChatBillingError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error || '');
+  return /paymentRequired|This AI action costs|0 remaining/i.test(message);
+}
+
 export default function Home() {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -239,6 +244,9 @@ export default function Home() {
     error: chatError,
   } = useChat<ChatMessage>({
     transport: new DefaultChatTransport({ api: '/api/chat' }),
+    onError: error => {
+      handleChatBillingError(error);
+    },
     onFinish: ({ message }) => {
       const sessionId = message.metadata?.sessionId;
       if (sessionId) setActiveSessionId(sessionId);
@@ -385,6 +393,13 @@ export default function Home() {
     setBillingModalReason(reason);
     setCheckoutError('');
     setBillingModalOpen(true);
+  }
+
+  function handleChatBillingError(error: unknown) {
+    if (!isChatBillingError(error)) return false;
+    openBillingModal('out_of_credits');
+    if (userId) void loadBilling(userId);
+    return true;
   }
 
   function closeSidebarOnMobile() {
@@ -683,6 +698,7 @@ export default function Home() {
       );
       await loadSessions();
     } catch (err) {
+      if (handleChatBillingError(err)) return;
       setMessages(prev => [
         ...prev,
         makeTextMessage('assistant', 'I understood this, but could not complete it: ' + (err instanceof Error ? err.message : 'Unknown error')),
@@ -1001,7 +1017,7 @@ export default function Home() {
           </div>
         ))}
         {busy && <div className={`text-sm text-slate-500 ${compact ? '' : 'mx-auto max-w-3xl'}`}>Working...</div>}
-        {chatError && <div className={`text-sm text-red-500 ${compact ? '' : 'mx-auto max-w-3xl'}`}>{chatError.message}</div>}
+        {chatError && !isChatBillingError(chatError) && <div className={`text-sm text-red-500 ${compact ? '' : 'mx-auto max-w-3xl'}`}>{chatError.message}</div>}
         <div ref={bottomRef} />
       </>
     );
