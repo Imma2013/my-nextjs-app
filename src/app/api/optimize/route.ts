@@ -6,6 +6,7 @@ import {
   recordPaidActionSuccess,
 } from '@/lib/billing';
 import { generateGeminiContent, geminiUserError } from '@/lib/gemini';
+import { ATS_RESUME_RULES } from '@/lib/resumeAts';
 
 export async function POST(req: NextRequest) {
   try {
@@ -24,6 +25,10 @@ export async function POST(req: NextRequest) {
     }
 
     const prompt = `You are an expert resume coach and ATS specialist. Analyze the resume against the job description and respond ONLY with valid JSON (no markdown, no backticks, no extra text).
+
+${ATS_RESUME_RULES}
+
+When suggesting improvements, do not recommend inserting unsupported tools, certifications, credentials, metrics, or keywords. Call them gaps instead.
 
 RESUME:
 ${resume}

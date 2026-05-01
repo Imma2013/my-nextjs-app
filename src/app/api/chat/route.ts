@@ -18,6 +18,7 @@ import { inferResumeBillingAction, PaymentRequiredError } from '@/lib/billing';
 import { createGeminiFallbackMiddleware, GEMINI_MODEL_FALLBACKS, geminiUserError } from '@/lib/gemini';
 import { runResumeEdit } from '@/lib/resumeEdit';
 import { RESUME_FACT_SAFETY_RULES } from '@/lib/resumeFacts';
+import { ATS_RESUME_RULES } from '@/lib/resumeAts';
 
 type ChatMessage = UIMessage<{ sessionId?: string }>;
 
@@ -148,7 +149,7 @@ export async function POST(req: NextRequest) {
         console.error('Failed to load active resume context:', err);
       }
 
-      systemPrompt += `\n\nThe user has an active resume (ID: ${resumeId}). When the user asks you to make changes to their resume, you MUST use the edit_resume tool. Pass resume_id as "${resumeId}" and provide a clear natural-language instruction. When tailoring the resume to a job, use the job title, company, and description to update the resume for ATS relevance while following these constraints:\n${RESUME_FACT_SAFETY_RULES}`;
+      systemPrompt += `\n\nThe user has an active resume (ID: ${resumeId}). When the user asks you to make changes to their resume, you MUST use the edit_resume tool. Pass resume_id as "${resumeId}" and provide a clear natural-language instruction. When tailoring the resume to a job, use the job title, company, and description to update the resume for ATS relevance while following these constraints:\n${RESUME_FACT_SAFETY_RULES}\n\n${ATS_RESUME_RULES}`;
     }
 
     const session = await composio.create(userId || 'anonymous');

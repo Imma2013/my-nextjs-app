@@ -1,3 +1,5 @@
+import { extractAtsKeywords } from './resumeAts';
+
 type TailorAnswer = {
   questionId: string;
   question?: string;
@@ -39,6 +41,7 @@ const COMMON_JOB_KEYWORDS = [
   'Training',
   'Leadership',
   'Sales',
+  'Microsoft Excel',
   'Microsoft Office',
   'Data entry',
   'Web design',
@@ -197,6 +200,28 @@ function supportedAnswerText(answers: TailorAnswer[]) {
 
 function containsClaim(text: string, claim: Claim) {
   return claim.patterns.some(pattern => pattern.test(text));
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function claimFromKeyword(keyword: string): Claim {
+  const escaped = escapeRegExp(keyword).replace(/\\\s+/g, '\\s+');
+  return {
+    label: keyword,
+    patterns: [new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`, 'i')],
+  };
+}
+
+function dedupeClaims(claims: Claim[]) {
+  const seen = new Set<string>();
+  return claims.filter(claim => {
+    const key = normalizeText(claim.label);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function claimsInText(text: string) {
@@ -382,8 +407,10 @@ export function auditTailoredResume({
   const audited = canonicalizeTailoredResume(source, tailoredParsed || {});
   const supportCorpus = [collectText(source), supportedAnswerText(answers)].join('\n');
   const jobText = `${job.title || ''}\n${job.company_name || ''}\n${job.description || ''}`;
-  const unsupportedClaims = CLAIMS.filter(claim => containsClaim(collectText(audited), claim) && !containsClaim(supportCorpus, claim));
-  const unsupportedJobClaims = CLAIMS.filter(claim => containsClaim(jobText, claim) && !containsClaim(supportCorpus, claim));
+  const atsJobClaims = extractAtsKeywords(jobText).map(claimFromKeyword);
+  const knownClaims = dedupeClaims([...CLAIMS, ...atsJobClaims]);
+  const unsupportedClaims = knownClaims.filter(claim => containsClaim(collectText(audited), claim) && !containsClaim(supportCorpus, claim));
+  const unsupportedJobClaims = knownClaims.filter(claim => containsClaim(jobText, claim) && !containsClaim(supportCorpus, claim));
 
   if (unsupportedClaims.length) {
     sanitizeSkills(audited, source, unsupportedClaims);

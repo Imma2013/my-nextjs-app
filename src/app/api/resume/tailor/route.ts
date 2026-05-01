@@ -8,6 +8,7 @@ import {
 } from '@/lib/billing';
 import { generateGeminiContent, geminiUserError } from '@/lib/gemini';
 import { RESUME_FACT_SAFETY_RULES } from '@/lib/resumeFacts';
+import { ATS_RESUME_RULES, validateAtsResume } from '@/lib/resumeAts';
 import { auditTailoredResume, canonicalVisibleBullets, canonicalizeTailoredResume, hasVisibleTailoringDiff } from '@/lib/resumeTailorAudit';
 import { runResumeEdit } from '@/lib/resumeEdit';
 
@@ -80,17 +81,17 @@ function defaultClarificationQuestions(job: TailorJob): TailorQuestion[] {
   return [
     {
       id: 'relevant_experience',
-      question: `Which of your existing experiences, projects, or skills are most relevant to ${role}?`,
-      reason: 'This helps prioritize proven resume content without adding unsupported claims.',
+      question: `Which role-specific keywords or requirements from ${role} are already proven by your resume or personal experience?`,
+      reason: 'Confirmed keywords can be used safely; unsupported ones should stay out of the resume copy.',
     },
     {
       id: 'confirmed_tools',
-      question: 'Which job-required tools, systems, or skills have you personally used and can honestly include?',
-      reason: 'Only user-confirmed or resume-supported capabilities should be emphasized.',
+      question: 'Which exact job-required tools, systems, certifications, or credentials have you personally used or earned?',
+      reason: 'Exact tools and credentials improve ATS matching only when they are factual.',
     },
     {
       id: 'role_specific_examples',
-      question: 'Are there any specific achievements, responsibilities, or examples you want reflected for this job?',
+      question: 'What measurable results, responsibilities, or transferable skills can you confirm for this role?',
       reason: 'Specific confirmed examples make the tailored copy stronger while preserving fact safety.',
     },
   ];
@@ -144,7 +145,9 @@ function buildTailoringEditInstruction({
   answers: TailorAnswer[];
   visibleOnlyRetry?: boolean;
 }) {
-  return `Tailor this resume copy for the target job using only supported facts.
+  return `${ATS_RESUME_RULES}
+
+Tailor this resume copy for the target job using only supported facts.
 
 Target job:
 Title: ${job.title || 'Role'}
@@ -158,9 +161,11 @@ ${answerFactsText(answers)}
 
 Instructions:
 - Rewrite preview-visible summary/profile text, skills ordering, and existing bullets to emphasize honest fit for the job.
+- Keep the resume ATS-safe: one-column, standard sections, plain text, plain bullets, full visible URLs, consistent dates, no tables, no images, no icons, and no keyword stuffing.
 - Put all rewritten responsibility or achievement text in preview-visible bullets arrays only.
 - Keep candidate name, employers, job titles, dates, education, awards, certifications, and project names unchanged.
 - Do not add unsupported claims. If a requirement is unsupported, leave it out.
+- Put unsupported but job-relevant keywords, tools, credentials, and certifications in missingKeywords rather than adding them to summary, skills, or bullets.
 - Use specific non-blank clarification answers where relevant. Ignore blank, skipped, uncertain, or "I don't know" answers.
 ${visibleOnlyRetry ? '- Retry because the first saved copy did not visibly change: rewrite only summary/profile, skills, and preview-visible bullets. Preserve every identity, employer, title, date, education, and project-name field exactly.' : ''}`;
 }
@@ -353,9 +358,12 @@ async function tailorWithGemini({
 
   const prompt = `${RESUME_FACT_SAFETY_RULES}
 
+${ATS_RESUME_RULES}
+
 Tailor this resume JSON for the job below. Improve wording, skills ordering, summary/headline, and supported bullets to align with the job. Keep the same broad JSON structure and return valid JSON only.
 
 Specific constraints:
+- Keep the generated resume one-column, plain-text, PDF-friendly, and ATS-safe with standard sections, plain bullets, full visible URLs, consistent dates, no tables, no images, and no icons.
 - Keep all existing experience job titles, employers, locations, and dates unchanged.
 - Keep education, certifications, awards, and project names unchanged unless the same fact already exists in the current resume.
 - For unsupported job requirements, add them to missingKeywords instead of inserting them into experience.
@@ -430,15 +438,18 @@ async function clarifyWithGemini({
 
   const prompt = `${RESUME_FACT_SAFETY_RULES}
 
+${ATS_RESUME_RULES}
+
 Inspect the resume facts and target job before resume tailoring. Return exactly 3 short-answer clarification questions before generating a tailored resume.
 
 Rules:
 - Ask exactly 3 short-answer questions.
 - Ask only for facts that materially affect tailoring and are not already proven by the resume.
+- Ask about missing role-specific keywords, exact tools used, measurable results, certifications or credentials, and confirmed transferable skills when they materially affect the job match.
 - For frontend, web design, software engineering, full-stack, or technical jobs, prioritize project facts such as alu.pics stack, frontend features, backend/API/database/auth/deployment, and what the user personally built.
 - For non-technical jobs, ask no technical questions; ask about directly relevant service, operations, communication, sales, leadership, scheduling, safety, or customer-support facts as appropriate.
 - Even if the resume already provides enough honest support for the role, still ask 3 optional questions that could safely improve the tailored copy.
-- Do not ask for metrics, tools, responsibilities, or credentials unless the job materially depends on them.
+- Do not ask for unrelated metrics, tools, responsibilities, or credentials unless the job materially depends on them.
 - Questions must be answerable in one or two sentences.
 - Blank or uncertain answers are allowed and will be ignored later.
 
@@ -624,6 +635,12 @@ export async function POST(req: NextRequest) {
       normalized.usedSourceFallback = true;
     }
 
+    const atsValidation = validateAtsResume(audited.parsed, job.description || [job.title, job.company_name].filter(Boolean).join('\n'));
+    const missingKeywords = Array.from(new Set([
+      ...audited.missingKeywords,
+      ...atsValidation.missingKeywords,
+    ])).slice(0, 8);
+
     const tailoredParsed = audited.parsed;
     const content = JSON.stringify(tailoredParsed);
     const summary = audited.summary;
@@ -659,7 +676,7 @@ export async function POST(req: NextRequest) {
       summary,
       improvements: audited.improvements,
       matchedKeywords: audited.matchedKeywords,
-      missingKeywords: audited.missingKeywords,
+      missingKeywords,
       downloadUrl: `/api/resumes/${encodeURIComponent(savedResume.id)}/download?userId=${encodeURIComponent(userId)}`,
       billing,
       processedBy: editResult.processedBy,

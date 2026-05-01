@@ -9,6 +9,7 @@ import {
 } from '@/lib/billing';
 import { generateGeminiContent } from '@/lib/gemini';
 import { RESUME_FACT_SAFETY_RULES } from '@/lib/resumeFacts';
+import { ATS_RESUME_RULES } from '@/lib/resumeAts';
 
 export type EditOp = { operation?: 'replace' | 'add' | 'remove'; path: string; value?: unknown };
 
@@ -171,6 +172,8 @@ export async function generateResumeEditOperations(message: string, parsed: any)
   if (!apiKey) return { operations: [] };
   const prompt = `${RESUME_FACT_SAFETY_RULES}
 
+${ATS_RESUME_RULES}
+
 Convert this resume edit request into JSON operations only. Do not return markdown or a full resume.
 
 Allowed paths include:
@@ -185,6 +188,7 @@ Allowed paths include:
 
 For broad requests like "tailor my resume", make conservative, fact-safe edits only: headline, summary/profile, skills ordering, and rewritten preview-visible bullets that highlight honest transferable skills. Never convert customer service, retail, cart handling, volunteer, or operations work into software engineering or technical infrastructure work.
 For tailoring, every rewritten experience, project, volunteer, volunteering, or community-service item MUST be saved into its preview-visible bullets array. Do not place rewritten text in highlights, details, description, or any new hidden field.
+For ATS safety, keep edits one-column, plain-text, standard-section friendly, PDF-copyable, and free of tables, images, icons, decorative symbols, hidden text, and keyword stuffing. Keep unsupported job keywords out of summary, skills, and bullets.
 Preserve candidate identity, existing employers, job titles, dates, education, awards, certifications, and project names unless the user explicitly requests changing those exact fields.
 If user clarification answers are included in the request, treat specific non-blank answers as confirmed facts for this edited resume copy only. Ignore blank, skipped, uncertain, "not sure", and "I don't know" answers.
 
