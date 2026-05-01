@@ -5,7 +5,8 @@ export type BillingAction =
   | 'resume_edit'
   | 'resume_optimizer'
   | 'cover_letter'
-  | 'resume_builder';
+  | 'resume_builder'
+  | 'ai_chat_reply';
 
 export type CheckoutPlan = 'pro_monthly' | 'pro_plus_monthly';
 export type BillingPlan = 'free' | CheckoutPlan;
@@ -59,7 +60,7 @@ export function creditCostForAction(action: BillingAction) {
 }
 
 export function isPaidBillingAction(action?: string | null): action is BillingAction {
-  return Boolean(action && ['tailor_resume', 'resume_edit', 'resume_optimizer', 'cover_letter', 'resume_builder'].includes(action));
+  return Boolean(action && ['tailor_resume', 'resume_edit', 'resume_optimizer', 'cover_letter', 'resume_builder', 'ai_chat_reply'].includes(action));
 }
 
 export function inferResumeBillingAction(message: string): BillingAction {
@@ -292,7 +293,7 @@ export async function recordPaidActionSuccess({
   if (!error) return data;
 
   if (error.message?.includes('INSUFFICIENT_CREDITS')) {
-    throw new PaymentRequiredError('You need AI actions to run this resume action.');
+    throw new PaymentRequiredError('You need AI actions to run this AI action.');
   }
 
   throw error;

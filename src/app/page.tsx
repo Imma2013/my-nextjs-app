@@ -79,6 +79,7 @@ const AI_ACTION_COSTS = {
   resume_optimizer: 1,
   cover_letter: 1,
   resume_builder: 2,
+  ai_chat_reply: 1,
 };
 const PRICING_PLANS = [
   { key: 'free', name: 'Free', price: '$0', actions: '5 AI actions/month', detail: '1 resume, 3 PDF downloads, unlimited job search' },
@@ -183,6 +184,10 @@ async function readJsonResponse(res: Response, fallbackMessage: string) {
 
 function looksLikePaidResumeRequest(text: string) {
   return /\btailor\b|\btarget\b|\bats\b|\bcover letter\b|\bresume builder\b|\b(optimi[sz]e|rewrite|improve|edit|update)\b.*\bresume\b|\bresume\b.*\b(optimi[sz]e|rewrite|improve|edit|update)\b/i.test(text);
+}
+
+function looksLikeFreeJobSearchRequest(text: string) {
+  return /\b(find|search|show|look for|list|recommend|browse|get)\b.*\b(jobs?|roles?|openings?|internships?|hiring|positions?)\b|\b(jobs?|roles?|openings?|internships?|hiring|positions?)\b.*\b(near me|remote|hybrid|onsite|available|open|hiring|at\b|in\b)/i.test(text);
 }
 
 function looksLikeTailorRequest(text: string) {
@@ -665,6 +670,10 @@ export default function Home() {
       openBillingModal('out_of_credits');
       return;
     }
+    if (billing && !looksLikeFreeJobSearchRequest(msg) && !looksLikePaidResumeRequest(msg) && billing.totalActionsRemaining < AI_ACTION_COSTS.ai_chat_reply) {
+      openBillingModal('out_of_credits');
+      return;
+    }
     setInput('');
     setActiveView('chat');
     try {
@@ -1040,7 +1049,7 @@ export default function Home() {
           <div className="pr-8">
             <h2 className="text-xl font-bold text-slate-900 sm:text-2xl">{billingModalTitle}</h2>
             <p className="mt-2 text-sm leading-6 text-slate-600">
-              Job search is free. Tailoring, AI resume edits, ATS analysis, and cover letters cost 1 AI action. Resume builder costs 2 AI actions.
+              AI chat reply = 1 action. Tailoring, AI resume edits, ATS analysis, and cover letters cost 1 AI action. Resume builder costs 2 AI actions. Job search = free.
             </p>
           </div>
 

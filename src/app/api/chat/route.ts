@@ -14,7 +14,13 @@ import { z } from 'zod';
 import { Composio } from '@composio/core';
 import { VercelProvider } from '@composio/vercel';
 import { searchJobs } from '@/lib/jobs';
-import { inferResumeBillingAction, PaymentRequiredError } from '@/lib/billing';
+import {
+  assertCanRunPaidAction,
+  creditCostForAction,
+  inferResumeBillingAction,
+  PaymentRequiredError,
+  recordPaidActionSuccess,
+} from '@/lib/billing';
 import { createGeminiFallbackMiddleware, GEMINI_MODEL_FALLBACKS, geminiUserError } from '@/lib/gemini';
 import { runResumeEdit } from '@/lib/resumeEdit';
 import { RESUME_FACT_SAFETY_RULES } from '@/lib/resumeFacts';
@@ -36,6 +42,20 @@ function textFromMessage(message?: UIMessage) {
     .map(part => part.text)
     .join('')
     .trim();
+}
+
+function looksLikeJobSearchRequest(text: string) {
+  return /\b(find|search|show|look for|list|recommend|browse|get)\b.*\b(jobs?|roles?|openings?|internships?|hiring|positions?)\b|\b(jobs?|roles?|openings?|internships?|hiring|positions?)\b.*\b(near me|remote|hybrid|onsite|available|open|hiring|at\b|in\b)/i.test(text);
+}
+
+function looksLikeResumeMutationRequest(text: string) {
+  return /\btailor\b|\btarget\b|\bats\b|\bcover letter\b|\bresume builder\b|\b(optimi[sz]e|rewrite|improve|edit|update)\b.*\bresume\b|\bresume\b.*\b(optimi[sz]e|rewrite|improve|edit|update)\b/i.test(text);
+}
+
+function toolNameFromPart(part: unknown) {
+  const typed = part as { type?: unknown; toolName?: unknown };
+  if (typeof typed.type === 'string' && typed.type.startsWith('tool-')) return typed.type.slice(5);
+  return typeof typed.toolName === 'string' ? typed.toolName : '';
 }
 
 async function insertChatMessage({
@@ -105,6 +125,10 @@ export async function POST(req: NextRequest) {
     let sid = sessionId || null;
     const lastMessage = messages[messages.length - 1];
     const lastUserText = lastMessage.role === 'user' ? textFromMessage(lastMessage) : '';
+    const isFreeJobSearch = looksLikeJobSearchRequest(lastUserText);
+    const shouldChargeChatReply = Boolean(lastUserText && !isFreeJobSearch && !looksLikeResumeMutationRequest(lastUserText));
+    const chatActionType = 'ai_chat_reply' as const;
+    const chatActionCost = creditCostForAction(chatActionType);
 
     if (userId) {
       if (!sid) {
@@ -130,6 +154,22 @@ export async function POST(req: NextRequest) {
           parts: lastMessage.parts,
         });
       }
+    }
+
+    const chatChargeKey = shouldChargeChatReply
+      ? `${idempotencyKey || generateId()}:chat:${sid || 'new'}:${lastMessage.id || 'message'}`
+      : '';
+
+    if (shouldChargeChatReply) {
+      if (!userId) {
+        return NextResponse.json({ error: 'Sign in to use AI chat.', paymentRequired: true, cost: chatActionCost, remainingActions: 0 }, { status: 402 });
+      }
+      await assertCanRunPaidAction({
+        userId,
+        actionType: chatActionType,
+        cost: chatActionCost,
+        idempotencyKey: chatChargeKey,
+      });
     }
 
     let mutatingToolActions = 0;
@@ -251,6 +291,8 @@ export async function POST(req: NextRequest) {
       messageMetadata: () => (sid ? { sessionId: sid } : undefined),
       onFinish: async ({ responseMessage }) => {
         const assistantText = textFromMessage(responseMessage);
+        const toolNames = responseMessage.parts.map(toolNameFromPart).filter(Boolean);
+        const usedFreeOrMutatingTool = toolNames.includes('search_jobs') || toolNames.includes('edit_resume');
         if (userId && sid) {
           await insertChatMessage({
             supabase,
@@ -261,10 +303,26 @@ export async function POST(req: NextRequest) {
             parts: responseMessage.parts,
           });
         }
+        if (userId && shouldChargeChatReply && !usedFreeOrMutatingTool) {
+          try {
+            await recordPaidActionSuccess({
+              userId,
+              actionType: chatActionType,
+              cost: chatActionCost,
+              idempotencyKey: chatChargeKey,
+              resumeId: resumeId || null,
+            });
+          } catch (error) {
+            console.error('Failed to record chat AI action:', error);
+          }
+        }
       },
     });
   } catch (e: unknown) {
     console.error(e);
+    if (e instanceof PaymentRequiredError) {
+      return NextResponse.json({ error: e.message, paymentRequired: true, ...e.details }, { status: 402 });
+    }
     const message = geminiUserError(e) || 'Unknown error';
     return NextResponse.json({ error: `Chat failed: ${message}` }, { status: 500 });
   }

@@ -37,12 +37,13 @@ test('billing catalog supports one paid top-up package', () => {
   assert.equal(parseTopUpPackage('actions_100'), null);
 });
 
-test('AI resume actions use simple integer action costs', () => {
+test('AI actions use simple integer action costs', () => {
   assert.equal(creditCostForAction('resume_edit'), 1);
   assert.equal(creditCostForAction('tailor_resume'), 1);
   assert.equal(creditCostForAction('resume_optimizer'), 1);
   assert.equal(creditCostForAction('cover_letter'), 1);
   assert.equal(creditCostForAction('resume_builder'), 2);
+  assert.equal(creditCostForAction('ai_chat_reply'), 1);
 });
 
 test('action helpers return selected monthly and top-up amounts', () => {
