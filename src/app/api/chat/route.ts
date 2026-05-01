@@ -132,8 +132,10 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    let mutatingToolActions = 0;
+    const confirmationReply = 'I completed 3 mutating actions in this exchange. Please confirm before I continue making more changes.';
     let systemPrompt =
-      'You are an expert resume coach and career advisor. You also have access to 1000+ real-world tools via Composio. You can use these tools to help the user directly when relevant. Always be helpful, concise, and professional. When the user asks to find or search for jobs, use the search_jobs tool and then briefly introduce the results.';
+      'You are an expert resume coach and career advisor. You also have access to 1000+ real-world tools via Composio. You can use these tools to help the user directly when relevant. Always be helpful, concise, and professional. When the user asks to find or search for jobs, use the search_jobs tool and then briefly introduce the results. As a safety guardrail, after 3 mutating AI or tool actions in one exchange, stop and ask the user to confirm before continuing. The search_jobs tool does not count toward that limit.';
 
     if (resumeId) {
       try {
@@ -176,6 +178,13 @@ export async function POST(req: NextRequest) {
             ),
         }),
         execute: async ({ resume_id, instruction }) => {
+          if (mutatingToolActions >= 3) {
+            return {
+              success: false,
+              confirmationRequired: true,
+              reply: confirmationReply,
+            };
+          }
           const actionType = inferResumeBillingAction(instruction);
           try {
             const result = await runResumeEdit({
@@ -185,6 +194,7 @@ export async function POST(req: NextRequest) {
               billingAction: actionType,
               idempotencyKey: `${idempotencyKey || generateId()}:edit_resume:${resume_id}`,
             });
+            if (result.resume) mutatingToolActions += 1;
 
             return {
               success: Boolean(result.resume),
@@ -199,10 +209,11 @@ export async function POST(req: NextRequest) {
               return {
                 success: false,
                 paymentRequired: true,
-                reply: error.message || `This AI action costs ${error.details.cost || 'credits'}. You have ${error.details.credits || 0} available.`,
-                credits: error.details.credits,
-                paidCredits: error.details.paidCredits,
-                dailyFreeCreditsRemaining: error.details.dailyFreeCreditsRemaining,
+                reply: error.message || `This AI action costs ${error.details.cost || 1}. You have ${error.details.remainingActions || 0} remaining.`,
+                remainingActions: error.details.remainingActions,
+                monthlyActionsRemaining: error.details.monthlyActionsRemaining,
+                rolloverActionsRemaining: error.details.rolloverActionsRemaining,
+                topUpActionsRemaining: error.details.topUpActionsRemaining,
                 cost: error.details.cost,
               };
             }

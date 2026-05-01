@@ -18,19 +18,15 @@ type ChatSession = { id: string; title: string; resumes?: ResumeContext | null }
 type EditPayload = { operation: 'replace' | 'add' | 'remove'; path: string; value?: unknown };
 type AppView = 'chat' | 'jobs' | 'resumes' | 'apps';
 type BillingSummary = {
-  credits: number;
-  paidCredits?: number;
-  dailyFreeCreditsRemaining?: number;
-  dailyFreeCreditsUsed?: number;
-  monthlyFreeCreditsUsed?: number;
-  monthlyFreeCreditCap?: number;
-  freeDailyCreditLimit?: number;
   plan: string;
-  planFamily?: string;
-  planTier?: number | null;
   planStatus: string;
   currentPeriodEnd?: string | null;
-  freeTailorAvailable: boolean;
+  monthlyActionsRemaining: number;
+  monthlyActionsLimit: number;
+  rolloverActionsRemaining: number;
+  topUpActionsRemaining: number;
+  totalActionsRemaining: number;
+  freeMonthlyActionsUsed?: number;
   pdfDownloadsUsed?: number;
   pdfDownloadsLimit?: number | null;
 };
@@ -78,20 +74,19 @@ type PendingTailorSelection = {
 };
 
 const AI_ACTION_COSTS = {
-  resume_edit: 0.9,
-  tailor_resume: 1.2,
-  resume_optimizer: 1.2,
-  cover_letter: 1.2,
+  resume_edit: 1,
+  tailor_resume: 1,
+  resume_optimizer: 1,
+  cover_letter: 1,
   resume_builder: 2,
 };
-const CREDIT_TIERS = [100, 200, 400, 800, 1200, 2000, 3000, 4000, 5000, 7500, 10000];
-const PLAN_PRICES = {
-  pro: [25, 50, 100, 200, 294, 480, 705, 920, 1125, 1688, 2250],
-  business: [50, 100, 200, 400, 588, 960, 1410, 1840, 2250, 3300, 4300],
-};
-const TOP_UP_AMOUNTS = Array.from({ length: 20 }, (_, index) => (index + 1) * 50);
+const PRICING_PLANS = [
+  { key: 'free', name: 'Free', price: '$0', actions: '5 AI actions/month', detail: '1 resume, 3 PDF downloads, unlimited job search' },
+  { key: 'pro_monthly', name: 'Pro', price: '$20/mo', actions: '100 AI actions/month', detail: 'Unlimited resumes and PDFs, rollover capped at 100' },
+  { key: 'pro_plus_monthly', name: 'Pro Plus', price: '$60/mo', actions: '400 AI actions/month', detail: 'Unlimited resumes and PDFs, rollover capped at 400' },
+] as const;
 
-function formatCredits(value?: number | null) {
+function formatActions(value?: number | null) {
   const numeric = Number(value || 0);
   return Number.isInteger(numeric) ? String(numeric) : numeric.toFixed(1);
 }
@@ -327,7 +322,7 @@ export default function Home() {
     } catch {
       window.localStorage.removeItem('pendingTailorResume');
     }
-  }, [userId, billing?.credits, billing?.dailyFreeCreditsRemaining]);
+  }, [userId, billing?.totalActionsRemaining, billing?.monthlyActionsRemaining]);
   useEffect(() => {
     if (!activeResume?.id) return;
     const channel = supabase
@@ -378,7 +373,7 @@ export default function Home() {
 
   function hasCreditsForResumeAction(text: string) {
     if (!billing) return false;
-    return billing.credits >= paidResumeActionCost(text);
+    return billing.totalActionsRemaining >= paidResumeActionCost(text);
   }
 
   function openBillingModal(reason: BillingModalReason) {
@@ -1026,23 +1021,17 @@ export default function Home() {
     </div>
   );
 
-  const planLabel = billing?.planFamily === 'business'
-    ? `Business${billing.planTier ? ` ${billing.planTier}` : ''}`
-    : billing?.planFamily === 'pro'
-      ? `Pro${billing.planTier ? ` ${billing.planTier}` : ''}`
-      : 'Free';
+  const planLabel = billing?.plan === 'pro_plus_monthly' ? 'Pro Plus' : billing?.plan === 'pro_monthly' ? 'Pro' : 'Free';
   const planStatusLabel = billing?.planStatus ? billing.planStatus.replace(/_/g, ' ') : 'inactive';
   const billingModalTitle = billingModalReason === 'out_of_credits'
-    ? "You're out of credits"
+    ? "You're out of AI actions"
     : billingModalReason === 'billing'
       ? 'Manage billing'
       : billingModalReason === 'topup'
-        ? 'Add credits'
+        ? 'Add AI actions'
         : 'Upgrade Resume AI';
-  const paidPlan = billing?.planFamily === 'pro' || billing?.planFamily === 'business';
-  const tailorButtonText = (billing?.dailyFreeCreditsRemaining || 0) >= AI_ACTION_COSTS.tailor_resume
-    ? `Tailor resume - ${formatCredits(AI_ACTION_COSTS.tailor_resume)} free credits`
-    : `Tailor resume - ${formatCredits(AI_ACTION_COSTS.tailor_resume)} credits`;
+  const paidPlan = billing?.plan === 'pro_monthly' || billing?.plan === 'pro_plus_monthly';
+  const tailorButtonText = `Tailor resume - ${formatActions(AI_ACTION_COSTS.tailor_resume)} AI action`;
   const billingModal = billingModalOpen && (
     <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-900/50 p-4 backdrop-blur-sm">
       <div className="relative my-auto w-full max-w-3xl rounded-xl bg-white shadow-2xl">
@@ -1051,15 +1040,15 @@ export default function Home() {
           <div className="pr-8">
             <h2 className="text-xl font-bold text-slate-900 sm:text-2xl">{billingModalTitle}</h2>
             <p className="mt-2 text-sm leading-6 text-slate-600">
-              Job search is free. AI resume actions use credits: edits cost 0.9, tailoring and optimization cost 1.2, and resume builder costs 2.
+              Job search is free. Tailoring, AI resume edits, ATS analysis, and cover letters cost 1 AI action. Resume builder costs 2 AI actions.
             </p>
           </div>
 
           <div className="mt-5 grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700 sm:grid-cols-4">
             <div>
-              <span className="block text-xs font-bold uppercase text-slate-500">Usable credits</span>
-              <b className="mt-1 block text-lg text-slate-900">{formatCredits(billing?.credits)}</b>
-              <span className="text-xs text-slate-500">Free + paid</span>
+              <span className="block text-xs font-bold uppercase text-slate-500">AI actions</span>
+              <b className="mt-1 block text-lg text-slate-900">{formatActions(billing?.totalActionsRemaining)}</b>
+              <span className="text-xs text-slate-500">Total remaining</span>
             </div>
             <div>
               <span className="block text-xs font-bold uppercase text-slate-500">Current plan</span>
@@ -1067,16 +1056,16 @@ export default function Home() {
               <span className="capitalize text-xs text-slate-500">{planStatusLabel}</span>
             </div>
             <div>
-              <span className="block text-xs font-bold uppercase text-slate-500">Free daily</span>
-              <b className="mt-1 block text-lg text-blue-700">{formatCredits(billing?.dailyFreeCreditsRemaining)}/{formatCredits(billing?.freeDailyCreditLimit || 5)}</b>
-              <span className="text-xs text-slate-500">{formatCredits(billing?.monthlyFreeCreditsUsed)}/{formatCredits(billing?.monthlyFreeCreditCap || 30)} monthly used</span>
+              <span className="block text-xs font-bold uppercase text-slate-500">Monthly</span>
+              <b className="mt-1 block text-lg text-blue-700">{formatActions(billing?.monthlyActionsRemaining)}/{formatActions(billing?.monthlyActionsLimit)}</b>
+              <span className="text-xs text-slate-500">{billing?.plan === 'free' ? 'UTC month reset' : 'Billing period grant'}</span>
             </div>
             <div>
-              <span className="block text-xs font-bold uppercase text-slate-500">Paid credits</span>
+              <span className="block text-xs font-bold uppercase text-slate-500">Extra</span>
               <b className="mt-1 block text-lg text-slate-900">
-                {formatCredits(billing?.paidCredits)}
+                {formatActions((billing?.rolloverActionsRemaining || 0) + (billing?.topUpActionsRemaining || 0))}
               </b>
-              <span className="text-xs text-slate-500">{billing?.pdfDownloadsLimit ? `${billing.pdfDownloadsUsed ?? 0}/${billing.pdfDownloadsLimit} PDFs used` : 'Unlimited PDFs'}</span>
+              <span className="text-xs text-slate-500">{formatActions(billing?.rolloverActionsRemaining)} rollover, {formatActions(billing?.topUpActionsRemaining)} top-up</span>
             </div>
           </div>
 
@@ -1095,38 +1084,26 @@ export default function Home() {
           <div className="mt-6">
             <div className="mb-3 flex items-center justify-between gap-3">
               <h3 className="text-sm font-bold uppercase text-slate-500">Monthly plans</h3>
-              <span className="text-xs text-slate-500">Credits refresh each month</span>
+              <span className="text-xs text-slate-500">AI actions refresh each month</span>
             </div>
-            <div className="grid gap-4 lg:grid-cols-2">
-              {(['pro', 'business'] as const).map(family => (
-                <div key={family} className="rounded-lg border border-slate-200 bg-white p-4">
-                  <div className="mb-3 flex items-center justify-between">
-                    <h4 className="font-bold text-slate-900">{family === 'business' ? 'Business' : 'Pro'}</h4>
-                    <span className="text-xs font-bold uppercase text-slate-400">Monthly</span>
-                  </div>
-                  <div className="grid max-h-72 gap-2 overflow-y-auto pr-1">
-                    {CREDIT_TIERS.map((tier, index) => {
-                      const key = `${family}_${tier}_monthly`;
-                      const price = PLAN_PRICES[family][index];
-                      return (
-                        <button
-                          key={key}
-                          onClick={() => startCheckout('subscription', key)}
-                          disabled={!!checkoutBusy || billingPortalBusy}
-                          className={`rounded-md border px-3 py-2 text-left hover:bg-slate-50 disabled:opacity-60 ${billing?.plan === key ? 'border-blue-300 bg-blue-50' : 'border-slate-200 bg-white'}`}
-                        >
-                          <span className="flex items-center justify-between gap-3">
-                            <span className="text-sm font-semibold text-slate-800">{tier.toLocaleString()} credits</span>
-                            <span className="text-right">
-                              <b className="block text-sm text-slate-900">${price}/mo</b>
-                              <span className="block text-xs font-bold text-blue-700">{checkoutBusy === key ? 'Opening...' : billing?.plan === key ? 'Current' : 'Choose'}</span>
-                            </span>
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
+            <div className="grid gap-3 md:grid-cols-3">
+              {PRICING_PLANS.map(plan => (
+                <button
+                  key={plan.key}
+                  onClick={() => plan.key === 'free' ? undefined : startCheckout('subscription', plan.key)}
+                  disabled={plan.key === 'free' || !!checkoutBusy || billingPortalBusy}
+                  className={`rounded-lg border p-4 text-left hover:bg-slate-50 disabled:cursor-default disabled:opacity-80 ${billing?.plan === plan.key ? 'border-blue-300 bg-blue-50' : 'border-slate-200 bg-white'}`}
+                >
+                  <span className="flex min-h-36 flex-col justify-between gap-4">
+                    <span>
+                      <b className="block text-base text-slate-900">{plan.name}</b>
+                      <span className="mt-2 block text-2xl font-bold text-slate-900">{plan.price}</span>
+                      <span className="mt-2 block text-sm font-semibold text-slate-700">{plan.actions}</span>
+                      <span className="mt-2 block text-sm leading-5 text-slate-500">{plan.detail}</span>
+                    </span>
+                    <span className="text-sm font-bold text-blue-700">{billing?.plan === plan.key ? 'Current' : plan.key === 'free' ? 'Included' : checkoutBusy === plan.key ? 'Opening...' : 'Choose'}</span>
+                  </span>
+                </button>
               ))}
             </div>
           </div>
@@ -1134,21 +1111,14 @@ export default function Home() {
           {paidPlan && (
           <div className="mt-6">
             <div className="mb-3 flex items-center justify-between gap-3">
-              <h3 className="text-sm font-bold uppercase text-slate-500">Top up credits</h3>
+              <h3 className="text-sm font-bold uppercase text-slate-500">Top up AI actions</h3>
               <span className="text-xs text-slate-500">One-time purchase, expires after 12 months</span>
             </div>
-            <div className="grid max-h-56 grid-cols-2 gap-2 overflow-y-auto pr-1 sm:grid-cols-4">
-              {TOP_UP_AMOUNTS.map(amount => {
-                const key = `credits_${amount}`;
-                return (
-                <button key={key} onClick={() => startCheckout('topup', key)} disabled={!!checkoutBusy || billingPortalBusy} className="rounded-lg border border-slate-200 p-3 text-left hover:bg-slate-50 disabled:opacity-60">
-                  <span className="flex items-center justify-between gap-3 sm:block">
-                    <b className="block text-base text-slate-900">{amount}</b>
-                    <span className="block text-sm text-slate-600">{checkoutBusy === key ? 'Opening...' : 'credits'}</span>
-                  </span>
-                </button>
-                );
-              })}
+            <div className="grid gap-2 sm:grid-cols-3">
+              <button onClick={() => startCheckout('topup', 'actions_50')} disabled={!!checkoutBusy || billingPortalBusy} className="rounded-lg border border-slate-200 p-4 text-left hover:bg-slate-50 disabled:opacity-60">
+                <b className="block text-base text-slate-900">$15</b>
+                <span className="mt-1 block text-sm text-slate-600">{checkoutBusy === 'actions_50' ? 'Opening...' : '50 AI actions'}</span>
+              </button>
             </div>
           </div>
           )}
@@ -1399,7 +1369,7 @@ export default function Home() {
                   <h2 className="text-2xl font-bold text-slate-900">My Resumes / CVs</h2>
                   {billing && (
                     <p className="mt-1 text-sm text-slate-500">
-                      {planLabel} plan - {formatCredits(billing.credits)} credits available
+                      {planLabel} plan - {formatActions(billing.totalActionsRemaining)} AI actions available
                       {billing.pdfDownloadsLimit ? ` - ${billing.pdfDownloadsUsed ?? 0}/${billing.pdfDownloadsLimit} PDF downloads used` : ' - unlimited PDF downloads'}
                     </p>
                   )}

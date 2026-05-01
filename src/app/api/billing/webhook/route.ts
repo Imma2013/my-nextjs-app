@@ -6,8 +6,6 @@ import {
   creditsForTopUp,
   parseCheckoutPlan,
   parseTopUpPackage,
-  PLAN_FAMILIES,
-  PLAN_TIERS,
   priceIdForPlan,
   stripeGet,
   type CheckoutPlan,
@@ -43,12 +41,8 @@ function verifyStripeSignature(payload: string, signature: string | null) {
 
 function planFromPrice(priceId?: string | null): CheckoutPlan | null {
   if (!priceId) return null;
-  for (const family of PLAN_FAMILIES) {
-    for (const tier of PLAN_TIERS) {
-      const plan = `${family}_${tier}_monthly` as CheckoutPlan;
-      if (priceId === priceIdForPlan(plan)) return plan;
-    }
-  }
+  if (priceId === priceIdForPlan('pro_monthly')) return 'pro_monthly';
+  if (priceId === priceIdForPlan('pro_plus_monthly')) return 'pro_plus_monthly';
   return null;
 }
 
@@ -116,7 +110,7 @@ async function handleCheckoutCompleted(event: any) {
     stripe_event_id: event.id,
     stripe_checkout_session_id: session.id,
     expires_at: expiresAt.toISOString(),
-    metadata: { package: pkg, plan_family: session.metadata?.plan_family || null },
+    metadata: { package: pkg, plan: session.metadata?.plan || null, kind: 'stripe_topup' },
   });
 }
 
@@ -147,9 +141,9 @@ async function upsertSubscriptionFromStripe(subscription: any, eventId?: string)
   const customerId = typeof subscription.customer === 'string' ? subscription.customer : subscription.customer?.id;
   const userId = subscription.metadata?.user_id || (customerId ? await userIdForCustomer(customerId) : undefined);
   const priceId = subscription.items?.data?.[0]?.price?.id;
-  const plan = parseCheckoutPlan(subscription.metadata?.plan)?.id || planFromPrice(priceId);
-  const parsedPlan = parseCheckoutPlan(plan);
-  if (!userId || !customerId || !plan || !parsedPlan) return;
+  const parsedPlan = parseCheckoutPlan(subscription.metadata?.plan) || parseCheckoutPlan(planFromPrice(priceId));
+  if (!userId || !customerId || !parsedPlan) return;
+  const plan = parsedPlan.id as CheckoutPlan;
 
   await upsertCustomer(userId, customerId);
 
@@ -190,11 +184,11 @@ async function upsertSubscriptionFromStripe(subscription: any, eventId?: string)
       expires_at: addOneMonth(currentPeriodEnd),
       metadata: {
         plan,
-        plan_family: parsedPlan.family,
-        tier: parsedPlan.tier,
+        kind: 'stripe_subscription',
         period_start: currentPeriodStart,
         period_end: currentPeriodEnd,
-        full_period_credits: parsedPlan.credits,
+        monthly_actions: parsedPlan.actions,
+        rollover_cap: parsedPlan.rolloverCap,
         already_granted: alreadyGranted,
       },
     });

@@ -7,77 +7,44 @@ export type BillingAction =
   | 'cover_letter'
   | 'resume_builder';
 
-export type PlanFamily = 'pro' | 'business';
-export type PlanTier = 100 | 200 | 400 | 800 | 1200 | 2000 | 3000 | 4000 | 5000 | 7500 | 10000;
-export type CheckoutPlan = `${PlanFamily}_${PlanTier}_monthly`;
-export type TopUpPackage =
-  | 'credits_50'
-  | 'credits_100'
-  | 'credits_150'
-  | 'credits_200'
-  | 'credits_250'
-  | 'credits_300'
-  | 'credits_350'
-  | 'credits_400'
-  | 'credits_450'
-  | 'credits_500'
-  | 'credits_550'
-  | 'credits_600'
-  | 'credits_650'
-  | 'credits_700'
-  | 'credits_750'
-  | 'credits_800'
-  | 'credits_850'
-  | 'credits_900'
-  | 'credits_950'
-  | 'credits_1000';
+export type CheckoutPlan = 'pro_monthly' | 'pro_plus_monthly';
+export type BillingPlan = 'free' | CheckoutPlan;
+export type TopUpPackage = 'actions_50';
 
 export class PaymentRequiredError extends Error {
   details: Record<string, unknown>;
 
-  constructor(message = 'Not enough credits', details: Record<string, unknown> = {}) {
+  constructor(message = 'Not enough AI actions', details: Record<string, unknown> = {}) {
     super(message);
     this.name = 'PaymentRequiredError';
     this.details = details;
   }
 }
 
-export const PLAN_TIERS = [100, 200, 400, 800, 1200, 2000, 3000, 4000, 5000, 7500, 10000] as const;
-export const PLAN_FAMILIES = ['pro', 'business'] as const;
-export const TOP_UP_AMOUNTS = Array.from({ length: 20 }, (_, index) => (index + 1) * 50);
-
-export const PLAN_PRICES: Record<PlanFamily, Record<PlanTier, number>> = {
-  pro: {
-    100: 25,
-    200: 50,
-    400: 100,
-    800: 200,
-    1200: 294,
-    2000: 480,
-    3000: 705,
-    4000: 920,
-    5000: 1125,
-    7500: 1688,
-    10000: 2250,
-  },
-  business: {
-    100: 50,
-    200: 100,
-    400: 200,
-    800: 400,
-    1200: 588,
-    2000: 960,
-    3000: 1410,
-    4000: 1840,
-    5000: 2250,
-    7500: 3300,
-    10000: 4300,
-  },
+export const PLAN_ACTIONS: Record<CheckoutPlan, number> = {
+  pro_monthly: 100,
+  pro_plus_monthly: 400,
 };
 
-export const FREE_DAILY_CREDITS = 5;
-export const FREE_MONTHLY_CREDIT_CAP = 30;
+export const PLAN_ROLLOVER_CAPS: Record<CheckoutPlan, number> = {
+  pro_monthly: 100,
+  pro_plus_monthly: 400,
+};
+
+export const PLAN_PRICES: Record<CheckoutPlan, number> = {
+  pro_monthly: 20,
+  pro_plus_monthly: 60,
+};
+
+export const PLAN_NAMES: Record<CheckoutPlan, string> = {
+  pro_monthly: 'Pro',
+  pro_plus_monthly: 'Pro Plus',
+};
+
+export const FREE_MONTHLY_ACTION_LIMIT = 5;
 export const FREE_PDF_DOWNLOAD_LIMIT = 3;
+export const TOP_UP_ACTIONS = 50;
+export const TOP_UP_PRICE = 15;
 
 export function adminClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -87,9 +54,8 @@ export function adminClient() {
 }
 
 export function creditCostForAction(action: BillingAction) {
-  if (action === 'resume_edit') return 0.9;
   if (action === 'resume_builder') return 2;
-  return 1.2;
+  return 1;
 }
 
 export function isPaidBillingAction(action?: string | null): action is BillingAction {
@@ -102,68 +68,43 @@ export function inferResumeBillingAction(message: string): BillingAction {
     : 'resume_edit';
 }
 
-function titleCasePlanFamily(family: PlanFamily) {
-  return family === 'business' ? 'Business' : 'Pro';
-}
-
-export function checkoutPlanId(family: PlanFamily, tier: PlanTier): CheckoutPlan {
-  return `${family}_${tier}_monthly`;
-}
-
 export function parseCheckoutPlan(plan?: string | null) {
-  const match = /^([a-z]+)_(\d+)_monthly$/.exec(String(plan || ''));
-  if (!match) return null;
-  const family = match[1] as PlanFamily;
-  const tier = Number(match[2]) as PlanTier;
-  if (!PLAN_FAMILIES.includes(family) || !PLAN_TIERS.includes(tier)) return null;
+  if (plan !== 'pro_monthly' && plan !== 'pro_plus_monthly') return null;
   return {
-    id: checkoutPlanId(family, tier),
-    family,
-    tier,
-    credits: tier,
-    price: PLAN_PRICES[family][tier],
-    name: `${titleCasePlanFamily(family)} ${tier}`,
+    id: plan,
+    actions: PLAN_ACTIONS[plan],
+    rolloverCap: PLAN_ROLLOVER_CAPS[plan],
+    price: PLAN_PRICES[plan],
+    name: PLAN_NAMES[plan],
   };
 }
 
 export function parseTopUpPackage(pkg?: string | null) {
-  const match = /^credits_(\d+)$/.exec(String(pkg || ''));
-  if (!match) return null;
-  const credits = Number(match[1]);
-  if (!TOP_UP_AMOUNTS.includes(credits)) return null;
-  return { id: `credits_${credits}` as TopUpPackage, credits };
+  if (pkg !== 'actions_50') return null;
+  return { id: 'actions_50' as TopUpPackage, actions: TOP_UP_ACTIONS, price: TOP_UP_PRICE };
 }
 
 export function priceIdForPlan(plan: CheckoutPlan) {
-  const parsed = parseCheckoutPlan(plan);
-  if (!parsed) return undefined;
-  return process.env[`NEXT_PUBLIC_STRIPE_${parsed.family.toUpperCase()}_${parsed.tier}_MONTHLY_PRICE_ID`];
+  if (plan === 'pro_monthly') return process.env.NEXT_PUBLIC_STRIPE_PRO_MONTHLY_PRICE_ID;
+  if (plan === 'pro_plus_monthly') return process.env.NEXT_PUBLIC_STRIPE_PRO_PLUS_MONTHLY_PRICE_ID;
+  return undefined;
 }
 
-export function priceIdForTopUp(family: PlanFamily) {
-  return process.env[`NEXT_PUBLIC_STRIPE_${family.toUpperCase()}_TOPUP_50_PRICE_ID`];
+export function priceIdForTopUp(pkg: TopUpPackage) {
+  if (pkg === 'actions_50') return process.env.NEXT_PUBLIC_STRIPE_ACTIONS_TOPUP_50_PRICE_ID;
+  return undefined;
 }
 
 export function creditsForPlan(plan: CheckoutPlan) {
-  return parseCheckoutPlan(plan)?.credits || 0;
+  return parseCheckoutPlan(plan)?.actions || 0;
 }
 
 export function creditsForTopUp(pkg: TopUpPackage) {
-  return parseTopUpPackage(pkg)?.credits || 0;
+  return parseTopUpPackage(pkg)?.actions || 0;
 }
 
 function roundCredits(value: number) {
   return Math.round(value * 100) / 100;
-}
-
-function startOfUtcDay(date = new Date()) {
-  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
-}
-
-function startOfNextUtcDay(date = new Date()) {
-  const next = startOfUtcDay(date);
-  next.setUTCDate(next.getUTCDate() + 1);
-  return next;
 }
 
 function startOfUtcMonth(date = new Date()) {
@@ -176,7 +117,11 @@ function startOfNextUtcMonth(date = new Date()) {
   return next;
 }
 
-export async function getActivePaidPlanFamily(userId: string): Promise<PlanFamily | null> {
+export function freeMonthlyActionsRemaining(used: number, limit = FREE_MONTHLY_ACTION_LIMIT) {
+  return Math.max(0, limit - used);
+}
+
+export async function getActivePaidPlan(userId: string): Promise<CheckoutPlan | null> {
   const supabase = adminClient();
   const { data, error } = await supabase
     .from('subscriptions')
@@ -189,18 +134,16 @@ export async function getActivePaidPlanFamily(userId: string): Promise<PlanFamil
 
   if (error) throw error;
   const parsed = parseCheckoutPlan(data?.plan);
-  return parsed?.family || null;
+  return (parsed?.id as CheckoutPlan | undefined) || null;
 }
 
 export async function getBillingSummary(userId: string) {
   const supabase = adminClient();
   const now = new Date().toISOString();
-  const todayStart = startOfUtcDay().toISOString();
-  const tomorrowStart = startOfNextUtcDay().toISOString();
   const monthStart = startOfUtcMonth().toISOString();
   const nextMonthStart = startOfNextUtcMonth().toISOString();
 
-  const [{ data: ledger, error: ledgerError }, { data: subscription }, { data: freeDailyEvents }, { data: freeMonthlyEvents }, { data: pdfDownloads }] = await Promise.all([
+  const [{ data: ledger, error: ledgerError }, { data: subscription }, { data: freeMonthlyEvents }, { data: pdfDownloads }] = await Promise.all([
     supabase
       .from('credit_ledger')
       .select('amount, source, expires_at')
@@ -218,15 +161,7 @@ export async function getBillingSummary(userId: string) {
       .from('usage_events')
       .select('credits_charged')
       .eq('user_id', userId)
-      .eq('billing_source', 'free_daily')
-      .eq('status', 'completed')
-      .gte('completed_at', todayStart)
-      .lt('completed_at', tomorrowStart),
-    supabase
-      .from('usage_events')
-      .select('credits_charged')
-      .eq('user_id', userId)
-      .eq('billing_source', 'free_daily')
+      .eq('billing_source', 'free_monthly')
       .eq('status', 'completed')
       .gte('completed_at', monthStart)
       .lt('completed_at', nextMonthStart),
@@ -240,32 +175,46 @@ export async function getBillingSummary(userId: string) {
 
   if (ledgerError) throw ledgerError;
 
-  const paidCredits = roundCredits((ledger || []).reduce((sum, row) => sum + Number(row.amount || 0), 0));
-  const dailyFreeCreditsUsed = roundCredits((freeDailyEvents || []).reduce((sum, row) => sum + Number(row.credits_charged || 0), 0));
-  const monthlyFreeCreditsUsed = roundCredits((freeMonthlyEvents || []).reduce((sum, row) => sum + Number(row.credits_charged || 0), 0));
-  const dailyFreeCreditsRemaining = roundCredits(Math.max(0, Math.min(
-    FREE_DAILY_CREDITS - dailyFreeCreditsUsed,
-    FREE_MONTHLY_CREDIT_CAP - monthlyFreeCreditsUsed,
-  )));
   const parsedPlan = parseCheckoutPlan(subscription?.plan);
+  const plan = parsedPlan?.id || 'free';
+  const monthlyActionsLimit = parsedPlan?.actions || FREE_MONTHLY_ACTION_LIMIT;
+  const currentPeriodEnd = subscription?.current_period_end || null;
+  const freeMonthlyActionsUsed = parsedPlan
+    ? 0
+    : roundCredits((freeMonthlyEvents || []).reduce((sum, row) => sum + Number(row.credits_charged || 0), 0));
+
+  const activeLedger = ledger || [];
+  const subscriptionRows = activeLedger.filter(row => ['stripe_subscription', 'subscription_usage'].includes(String(row.source)));
+  const topUpRows = activeLedger.filter(row => ['stripe_topup', 'topup_usage'].includes(String(row.source)));
+  const subscriptionActionsRemaining = Math.max(0, roundCredits(subscriptionRows.reduce((sum, row) => sum + Number(row.amount || 0), 0)));
+  const rolloverActionsRemaining = parsedPlan && currentPeriodEnd
+    ? Math.max(0, roundCredits(subscriptionRows
+      .filter(row => row.expires_at && String(row.expires_at) <= currentPeriodEnd)
+      .reduce((sum, row) => sum + Number(row.amount || 0), 0)))
+    : 0;
+  const monthlyActionsRemaining = parsedPlan
+    ? Math.max(0, roundCredits(subscriptionActionsRemaining - rolloverActionsRemaining))
+    : freeMonthlyActionsRemaining(freeMonthlyActionsUsed);
+  const topUpActionsRemaining = Math.max(0, roundCredits(topUpRows.reduce((sum, row) => sum + Number(row.amount || 0), 0)));
+  const totalActionsRemaining = parsedPlan
+    ? roundCredits(subscriptionActionsRemaining + topUpActionsRemaining)
+    : monthlyActionsRemaining;
 
   return {
     userId,
-    credits: roundCredits(Math.max(0, paidCredits + dailyFreeCreditsRemaining)),
-    paidCredits: Math.max(0, paidCredits),
-    dailyFreeCreditsRemaining,
-    dailyFreeCreditsUsed,
-    monthlyFreeCreditsUsed,
-    monthlyFreeCreditCap: FREE_MONTHLY_CREDIT_CAP,
-    freeDailyCreditLimit: FREE_DAILY_CREDITS,
-    plan: parsedPlan?.id || 'free',
-    planFamily: parsedPlan?.family || 'free',
-    planTier: parsedPlan?.tier || null,
-    planStatus: subscription?.status || 'free',
-    currentPeriodEnd: subscription?.current_period_end || null,
-    freeTailorAvailable: dailyFreeCreditsRemaining >= creditCostForAction('tailor_resume'),
+    plan,
+    planStatus: parsedPlan ? subscription?.status || 'inactive' : 'free',
+    currentPeriodEnd,
+    monthlyActionsRemaining,
+    monthlyActionsLimit,
+    rolloverActionsRemaining,
+    topUpActionsRemaining,
+    totalActionsRemaining,
+    freeMonthlyActionsUsed,
     pdfDownloadsUsed: pdfDownloads?.length || 0,
     pdfDownloadsLimit: parsedPlan ? null : FREE_PDF_DOWNLOAD_LIMIT,
+    credits: totalActionsRemaining,
+    freeTailorAvailable: plan === 'free' && monthlyActionsRemaining >= creditCostForAction('tailor_resume'),
   };
 }
 
@@ -284,7 +233,7 @@ export async function assertCanRunPaidAction({
 
   const { data: existing, error: existingError } = await supabase
     .from('usage_events')
-    .select('id, credits_charged, free_tailor_used, status')
+    .select('id, credits_charged, free_tailor_used, billing_source, status')
     .eq('user_id', userId)
     .eq('action_type', actionType)
     .eq('idempotency_key', idempotencyKey)
@@ -293,24 +242,26 @@ export async function assertCanRunPaidAction({
   if (existingError) throw existingError;
   if (existing?.status === 'completed') {
     return {
-      mode: existing.free_tailor_used ? 'free_daily' : 'credits',
+      mode: existing.billing_source || (existing.free_tailor_used ? 'free_monthly' : 'actions'),
       alreadyRecorded: true,
     } as const;
   }
 
   const summary = await getBillingSummary(userId);
-  if (summary.dailyFreeCreditsRemaining >= cost) {
-    return { mode: 'free_daily', alreadyRecorded: false } as const;
+  if (summary.plan === 'free' && summary.monthlyActionsRemaining >= cost) {
+    return { mode: 'free_monthly', alreadyRecorded: false } as const;
   }
 
-  if (summary.paidCredits >= cost) {
-    return { mode: 'credits', alreadyRecorded: false } as const;
+  if (summary.plan !== 'free' && summary.totalActionsRemaining >= cost) {
+    return { mode: 'actions', alreadyRecorded: false } as const;
   }
 
-  throw new PaymentRequiredError(`This AI action costs ${cost} credits. You have ${summary.credits} available.`, {
-    credits: summary.credits,
-    paidCredits: summary.paidCredits,
-    dailyFreeCreditsRemaining: summary.dailyFreeCreditsRemaining,
+  throw new PaymentRequiredError(`This AI action costs ${cost} action${cost === 1 ? '' : 's'}. You have ${summary.totalActionsRemaining} remaining.`, {
+    credits: summary.totalActionsRemaining,
+    remainingActions: summary.totalActionsRemaining,
+    monthlyActionsRemaining: summary.monthlyActionsRemaining,
+    rolloverActionsRemaining: summary.rolloverActionsRemaining,
+    topUpActionsRemaining: summary.topUpActionsRemaining,
     cost,
     plan: summary.plan,
   });
@@ -341,7 +292,7 @@ export async function recordPaidActionSuccess({
   if (!error) return data;
 
   if (error.message?.includes('INSUFFICIENT_CREDITS')) {
-    throw new PaymentRequiredError('You need credits to run this AI resume action.');
+    throw new PaymentRequiredError('You need AI actions to run this resume action.');
   }
 
   throw error;

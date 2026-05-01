@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
   creditsForTopUp,
-  getActivePaidPlanFamily,
+  getActivePaidPlan,
   getOrCreateStripeCustomer,
   parseCheckoutPlan,
   parseTopUpPackage,
@@ -66,12 +66,10 @@ export async function POST(req: NextRequest) {
         'metadata[user_id]': userId,
         'metadata[type]': 'subscription',
         'metadata[plan]': checkoutPlan,
-        'metadata[plan_family]': parsedPlan.family,
-        'metadata[credits]': parsedPlan.credits,
+        'metadata[actions]': parsedPlan.actions,
         'subscription_data[metadata][user_id]': userId,
         'subscription_data[metadata][plan]': checkoutPlan,
-        'subscription_data[metadata][plan_family]': parsedPlan.family,
-        'subscription_data[metadata][credits]': parsedPlan.credits,
+        'subscription_data[metadata][actions]': parsedPlan.actions,
       });
 
       return NextResponse.json({ url: session.url });
@@ -82,16 +80,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Invalid top-up package' }, { status: 400 });
     }
 
-    const activeFamily = await getActivePaidPlanFamily(userId);
-    if (!activeFamily) {
-      return NextResponse.json({ error: 'Top-ups are only available for active Pro or Business plans' }, { status: 400 });
+    const activePlan = await getActivePaidPlan(userId);
+    if (!activePlan) {
+      return NextResponse.json({ error: 'Top-ups are only available for active paid plans' }, { status: 400 });
     }
 
-    const price = priceIdForTopUp(activeFamily);
+    const topUp = parsedTopUp.id as TopUpPackage;
+    const price = priceIdForTopUp(topUp);
     if (!price) return NextResponse.json({ error: 'Stripe top-up price is not configured' }, { status: 500 });
 
-    const topUp = parsedTopUp.id as TopUpPackage;
-    const credits = creditsForTopUp(topUp);
+    const actions = creditsForTopUp(topUp);
     const session = await stripeRequest<CheckoutResponse>('/v1/checkout/sessions', {
       mode: 'payment',
       customer,
@@ -99,17 +97,17 @@ export async function POST(req: NextRequest) {
       success_url: successUrl,
       cancel_url: cancelUrl,
       'line_items[0][price]': price,
-      'line_items[0][quantity]': credits / 50,
+      'line_items[0][quantity]': 1,
       'metadata[user_id]': userId,
       'metadata[type]': 'topup',
       'metadata[package]': topUp,
-      'metadata[plan_family]': activeFamily,
-      'metadata[credits]': credits,
+      'metadata[plan]': activePlan,
+      'metadata[actions]': actions,
       'payment_intent_data[metadata][user_id]': userId,
       'payment_intent_data[metadata][type]': 'topup',
       'payment_intent_data[metadata][package]': topUp,
-      'payment_intent_data[metadata][plan_family]': activeFamily,
-      'payment_intent_data[metadata][credits]': credits,
+      'payment_intent_data[metadata][plan]': activePlan,
+      'payment_intent_data[metadata][actions]': actions,
     });
 
     return NextResponse.json({ url: session.url });
