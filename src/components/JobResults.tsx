@@ -7,7 +7,7 @@ export function JobResults({
   query,
   jobs,
   onTailorResume,
-  tailorButtonLabel = 'Tailor resume - 1 credit',
+  tailorButtonLabel = 'Tailor resume - 1.2 credits',
   tailoringJobKey = '',
 }: {
   query?: string;

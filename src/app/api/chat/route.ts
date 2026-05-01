@@ -199,10 +199,11 @@ export async function POST(req: NextRequest) {
               return {
                 success: false,
                 paymentRequired: true,
-                reply: error.message || 'You need credits to edit this resume with AI.',
+                reply: error.message || `This AI action costs ${error.details.cost || 'credits'}. You have ${error.details.credits || 0} available.`,
                 credits: error.details.credits,
+                paidCredits: error.details.paidCredits,
+                dailyFreeCreditsRemaining: error.details.dailyFreeCreditsRemaining,
                 cost: error.details.cost,
-                freeTailorAvailable: error.details.freeTailorAvailable,
               };
             }
 
