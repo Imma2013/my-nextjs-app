@@ -19,6 +19,7 @@ type AppView = 'chat' | 'jobs' | 'resumes' | 'apps';
 type BillingSummary = {
   plan: string;
   planStatus: string;
+  isPaid?: boolean;
   currentPeriodEnd?: string | null;
   monthlyActionsRemaining: number;
   monthlyActionsLimit: number;
@@ -37,7 +38,6 @@ type ChatDataParts = {
   };
 };
 type ChatMessage = UIMessage<{ sessionId?: string }, ChatDataParts>;
-type BillingModalReason = 'out_of_credits' | 'upgrade' | 'topup' | 'billing';
 type ToolkitConnection = {
   slug: string;
   name: string;
@@ -80,28 +80,7 @@ type PendingTailorSelection = {
   jobIndex: number;
 };
 
-const AI_ACTION_COSTS = {
-  resume_edit: 1,
-  tailor_resume: 1,
-  resume_optimizer: 1,
-  cover_letter: 1,
-  resume_builder: 2,
-  ai_chat_reply: 1,
-};
-const PRICING_PLANS = [
-  { key: 'free', name: 'Free', price: '$0', actions: '5 AI actions/month', detail: '1 resume, 3 PDF downloads, unlimited job search' },
-  { key: 'pro_monthly', name: 'Pro', price: '$20/mo', actions: '100 AI actions/month', detail: 'Unlimited resumes and PDFs, rollover capped at 100' },
-  { key: 'pro_plus_monthly', name: 'Pro Plus', price: '$60/mo', actions: '400 AI actions/month', detail: 'Unlimited resumes and PDFs, rollover capped at 400' },
-] as const;
-
-function formatActions(value?: number | null) {
-  const numeric = Number(value || 0);
-  return Number.isInteger(numeric) ? String(numeric) : numeric.toFixed(1);
-}
-
-function paidResumeActionCost(text: string) {
-  return looksLikeTailorRequest(text) ? AI_ACTION_COSTS.tailor_resume : AI_ACTION_COSTS.resume_edit;
-}
+const CHAT_MONTHLY_PLAN = 'chat_monthly';
 
 function makeTextMessage(role: 'user' | 'assistant', text: string): ChatMessage {
   return {
@@ -189,16 +168,9 @@ async function readJsonResponse(res: Response, fallbackMessage: string) {
   }
 }
 
-function looksLikePaidResumeRequest(text: string) {
-  return /\btailor\b|\btarget\b|\bats\b|\bcover letter\b|\bresume builder\b|\b(optimi[sz]e|rewrite|improve|edit|update)\b.*\bresume\b|\bresume\b.*\b(optimi[sz]e|rewrite|improve|edit|update)\b/i.test(text);
-}
-
-function looksLikeFreeJobSearchRequest(text: string) {
-  return /\b(find|search|show|look for|list|recommend|browse|get)\b.*\b(jobs?|roles?|openings?|internships?|hiring|positions?)\b|\b(jobs?|roles?|openings?|internships?|hiring|positions?)\b.*\b(near me|remote|hybrid|onsite|available|open|hiring|at\b|in\b)/i.test(text);
-}
-
-function looksLikeTailorRequest(text: string) {
-  return /\btailor\b|\btarget\b|\bats\b|\bjob description\b/i.test(text);
+function isChatBillingError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error || '');
+  return /paymentRequired|subscribe to cryzo|subscriptionRequired/i.test(message);
 }
 
 function isChatBillingError(error: unknown) {
@@ -233,7 +205,6 @@ export default function Home() {
   const [tailorPickerLoading, setTailorPickerLoading] = useState(false);
   const [billing, setBilling] = useState<BillingSummary | null>(null);
   const [billingModalOpen, setBillingModalOpen] = useState(false);
-  const [billingModalReason, setBillingModalReason] = useState<BillingModalReason>('upgrade');
   const [checkoutBusy, setCheckoutBusy] = useState('');
   const [checkoutError, setCheckoutError] = useState('');
   const [billingPortalBusy, setBillingPortalBusy] = useState(false);
@@ -274,7 +245,7 @@ export default function Home() {
         if (resumeFromTool.id !== activeResume?.id) setResumePreviewOpen(false);
         setActiveResume(resumeFromTool);
       }
-      if (paymentRequired) openBillingModal('out_of_credits');
+      if (paymentRequired) openBillingModal();
       if (userId) {
         loadSessions(userId);
         loadResumes(userId);
@@ -283,6 +254,7 @@ export default function Home() {
     },
   });
   const busy = chatStatus === 'submitted' || chatStatus === 'streaming';
+  const hasActiveSubscription = Boolean(billing?.isPaid || (billing?.plan && billing.plan !== 'unpaid' && ['active', 'trialing'].includes(billing.planStatus)));
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
   useEffect(() => {
@@ -325,7 +297,7 @@ export default function Home() {
         answers?: TailorAnswer[];
         clarificationId?: string;
       };
-      if (!pending.instruction || !pending.resume || !hasCreditsForResumeAction(pending.instruction)) return;
+      if (!pending.instruction || !pending.resume || !hasActiveSubscription) return;
       resumedCheckoutRef.current = true;
       window.localStorage.removeItem('pendingTailorResume');
       setActiveResume(pending.resume);
@@ -347,7 +319,7 @@ export default function Home() {
     } catch {
       window.localStorage.removeItem('pendingTailorResume');
     }
-  }, [userId, billing?.totalActionsRemaining, billing?.monthlyActionsRemaining]);
+  }, [userId, hasActiveSubscription]);
   useEffect(() => {
     if (!activeResume?.id) return;
     const channel = supabase
@@ -396,20 +368,14 @@ export default function Home() {
     }
   }
 
-  function hasCreditsForResumeAction(text: string) {
-    if (!billing) return false;
-    return billing.totalActionsRemaining >= paidResumeActionCost(text);
-  }
-
-  function openBillingModal(reason: BillingModalReason) {
-    setBillingModalReason(reason);
+  function openBillingModal() {
     setCheckoutError('');
     setBillingModalOpen(true);
   }
 
   function handleChatBillingError(error: unknown) {
     if (!isChatBillingError(error)) return false;
-    openBillingModal('out_of_credits');
+    openBillingModal();
     if (userId) void loadBilling(userId);
     return true;
   }
@@ -493,21 +459,23 @@ export default function Home() {
     }
   }
 
-  async function startCheckout(checkoutType: 'subscription' | 'topup', value: string) {
+  async function startCheckout() {
     if (!userId) {
       setShowAuthModal(true);
       return;
     }
-    setCheckoutBusy(value);
+    setCheckoutBusy(CHAT_MONTHLY_PLAN);
     setCheckoutError('');
     try {
-      const body = checkoutType === 'subscription'
-        ? { userId, checkoutType, plan: value, returnPath: window.location.pathname + window.location.search }
-        : { userId, checkoutType, package: value, returnPath: window.location.pathname + window.location.search };
       const res = await fetch('/api/billing/checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+        body: JSON.stringify({
+          userId,
+          checkoutType: 'subscription',
+          plan: CHAT_MONTHLY_PLAN,
+          returnPath: window.location.pathname + window.location.search,
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Checkout failed');
@@ -596,7 +564,7 @@ export default function Home() {
       const res = await fetch('/api/resumes', { method: 'POST', body: fd });
       const data = await res.json();
       if (!res.ok) {
-        if (data.upgradeRequired) openBillingModal('upgrade');
+        if (data.upgradeRequired) openBillingModal();
         throw new Error(data.error || 'Upload failed');
       }
       setActiveResume(data.resume);
@@ -636,7 +604,7 @@ export default function Home() {
       const res = await fetch(url);
       if (!res.ok) {
         const data = await readJsonResponse(res, 'Download failed');
-        if (data.upgradeRequired) openBillingModal('upgrade');
+        if (data.upgradeRequired) openBillingModal();
         throw new Error(data.error || 'Download failed');
       }
 
@@ -670,6 +638,10 @@ export default function Home() {
       }),
     });
     const data = await readJsonResponse(res, 'Resume edit failed');
+    if (data.paymentRequired) {
+      openBillingModal();
+      throw new Error(data.error || 'Subscribe to Cryzo to use AI Chat + Resume Agent.');
+    }
     if (!res.ok) throw new Error(data.error || 'Resume edit failed');
     if (!data.resume) throw new Error(data.reply || 'Could not map this to a saved resume field');
     setActiveResume(data.resume);
@@ -679,6 +651,7 @@ export default function Home() {
 
   async function handleManualEdit(edit: EditPayload) {
     if (!userId) { setShowAuthModal(true); return; }
+    if (!hasActiveSubscription) { openBillingModal(); return; }
     try {
       await saveResumeEdit(edit);
     } catch (err) {
@@ -693,12 +666,8 @@ export default function Home() {
       setShowAuthModal(true);
       return;
     }
-    if (activeResume && billing && looksLikePaidResumeRequest(msg) && !hasCreditsForResumeAction(msg)) {
-      openBillingModal('out_of_credits');
-      return;
-    }
-    if (billing && !looksLikeFreeJobSearchRequest(msg) && !looksLikePaidResumeRequest(msg) && billing.totalActionsRemaining < AI_ACTION_COSTS.ai_chat_reply) {
-      openBillingModal('out_of_credits');
+    if (!hasActiveSubscription) {
+      openBillingModal();
       return;
     }
     setInput('');
@@ -791,7 +760,7 @@ export default function Home() {
             clarificationId: options.clarificationId,
           }));
         }
-        openBillingModal('out_of_credits');
+        openBillingModal();
         return;
       }
       if (!res.ok) throw new Error(data.error || 'Failed to tailor resume');
@@ -822,6 +791,10 @@ export default function Home() {
   async function tailorResume(job: JobResult, index = 0) {
     if (!userId) {
       setShowAuthModal(true);
+      return;
+    }
+    if (!hasActiveSubscription) {
+      openBillingModal();
       return;
     }
 
@@ -1058,107 +1031,39 @@ export default function Home() {
     </div>
   );
 
-  const planLabel = billing?.plan === 'pro_plus_monthly' ? 'Pro Plus' : billing?.plan === 'pro_monthly' ? 'Pro' : 'Free';
-  const planStatusLabel = billing?.planStatus ? billing.planStatus.replace(/_/g, ' ') : 'inactive';
-  const billingModalTitle = billingModalReason === 'out_of_credits'
-    ? "You're out of AI actions"
-    : billingModalReason === 'billing'
-      ? 'Manage billing'
-      : billingModalReason === 'topup'
-        ? 'Add AI actions'
-        : 'Upgrade Cryzo';
-  const paidPlan = billing?.plan === 'pro_monthly' || billing?.plan === 'pro_plus_monthly';
-  const tailorButtonText = `Tailor resume - ${formatActions(AI_ACTION_COSTS.tailor_resume)} AI action`;
+  const planLabel = hasActiveSubscription ? 'Active subscription' : 'Not subscribed';
+  const planStatusLabel = billing?.planStatus ? billing.planStatus.replace(/_/g, ' ') : 'unpaid';
+  const tailorButtonText = 'Tailor resume';
   const billingModal = billingModalOpen && (
     <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-900/50 p-4 backdrop-blur-sm">
-      <div className="relative my-auto w-full max-w-3xl rounded-xl bg-white shadow-2xl">
+      <div className="relative my-auto w-full max-w-md rounded-xl bg-white shadow-2xl">
         <button onClick={() => setBillingModalOpen(false)} className="absolute right-4 top-4 z-10 text-sm font-bold text-slate-400 hover:text-slate-600">Close</button>
         <div className="max-h-[calc(100vh-2rem)] overflow-y-auto p-5 sm:p-7">
           <div className="pr-8">
-            <h2 className="text-xl font-bold text-slate-900 sm:text-2xl">{billingModalTitle}</h2>
+            <h2 className="text-xl font-bold text-slate-900 sm:text-2xl">Subscribe to Cryzo</h2>
             <p className="mt-2 text-sm leading-6 text-slate-600">
-              AI chat reply = 1 action. Tailoring, AI resume edits, ATS analysis, and cover letters cost 1 AI action. Resume builder costs 2 AI actions. Job search = free.
+              Unlock AI Chat + Resume Agent. Job Search remains available without a subscription.
             </p>
           </div>
 
-          <div className="mt-5 grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700 sm:grid-cols-4">
-            <div>
-              <span className="block text-xs font-bold uppercase text-slate-500">AI actions</span>
-              <b className="mt-1 block text-lg text-slate-900">{formatActions(billing?.totalActionsRemaining)}</b>
-              <span className="text-xs text-slate-500">Total remaining</span>
-            </div>
-            <div>
-              <span className="block text-xs font-bold uppercase text-slate-500">Current plan</span>
-              <b className="mt-1 block text-lg text-slate-900">{planLabel}</b>
-              <span className="capitalize text-xs text-slate-500">{planStatusLabel}</span>
-            </div>
-            <div>
-              <span className="block text-xs font-bold uppercase text-slate-500">Monthly</span>
-              <b className="mt-1 block text-lg text-blue-700">{formatActions(billing?.monthlyActionsRemaining)}/{formatActions(billing?.monthlyActionsLimit)}</b>
-              <span className="text-xs text-slate-500">{billing?.plan === 'free' ? 'UTC month reset' : 'Billing period grant'}</span>
-            </div>
-            <div>
-              <span className="block text-xs font-bold uppercase text-slate-500">Extra</span>
-              <b className="mt-1 block text-lg text-slate-900">
-                {formatActions((billing?.rolloverActionsRemaining || 0) + (billing?.topUpActionsRemaining || 0))}
-              </b>
-              <span className="text-xs text-slate-500">{formatActions(billing?.rolloverActionsRemaining)} rollover, {formatActions(billing?.topUpActionsRemaining)} top-up</span>
-            </div>
+          <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <span className="block text-xs font-bold uppercase text-slate-500">Offer</span>
+            <b className="mt-1 block text-lg text-slate-900">AI Chat + Resume Agent</b>
+            <span className="mt-3 block text-xs font-bold uppercase text-slate-500">Price</span>
+            <b className="mt-1 block text-3xl font-bold text-slate-900">$10/month</b>
+            <span className="mt-3 block text-xs font-bold uppercase text-slate-500">Status</span>
+            <span className="mt-1 block text-sm capitalize text-slate-600">{planLabel} - {planStatusLabel}</span>
           </div>
 
-          {paidPlan && (
-            <div className="mt-4 flex flex-col gap-2 rounded-lg border border-blue-100 bg-blue-50 p-4 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <b className="block text-sm text-slate-900">Subscription controls</b>
-                <span className="text-sm text-slate-600">Update payment details, invoices, or plan status in Stripe.</span>
-              </div>
-              <button onClick={openBillingPortal} disabled={billingPortalBusy || !!checkoutBusy} className="rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-60">
-                {billingPortalBusy ? 'Opening...' : 'Manage subscription'}
-              </button>
-            </div>
-          )}
-
-          <div className="mt-6">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <h3 className="text-sm font-bold uppercase text-slate-500">Monthly plans</h3>
-              <span className="text-xs text-slate-500">AI actions refresh each month</span>
-            </div>
-            <div className="grid gap-3 md:grid-cols-3">
-              {PRICING_PLANS.map(plan => (
-                <button
-                  key={plan.key}
-                  onClick={() => plan.key === 'free' ? undefined : startCheckout('subscription', plan.key)}
-                  disabled={plan.key === 'free' || !!checkoutBusy || billingPortalBusy}
-                  className={`rounded-lg border p-4 text-left hover:bg-slate-50 disabled:cursor-default disabled:opacity-80 ${billing?.plan === plan.key ? 'border-blue-300 bg-blue-50' : 'border-slate-200 bg-white'}`}
-                >
-                  <span className="flex min-h-36 flex-col justify-between gap-4">
-                    <span>
-                      <b className="block text-base text-slate-900">{plan.name}</b>
-                      <span className="mt-2 block text-2xl font-bold text-slate-900">{plan.price}</span>
-                      <span className="mt-2 block text-sm font-semibold text-slate-700">{plan.actions}</span>
-                      <span className="mt-2 block text-sm leading-5 text-slate-500">{plan.detail}</span>
-                    </span>
-                    <span className="text-sm font-bold text-blue-700">{billing?.plan === plan.key ? 'Current' : plan.key === 'free' ? 'Included' : checkoutBusy === plan.key ? 'Opening...' : 'Choose'}</span>
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {paidPlan && (
-          <div className="mt-6">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <h3 className="text-sm font-bold uppercase text-slate-500">Top up AI actions</h3>
-              <span className="text-xs text-slate-500">One-time purchase, expires after 12 months</span>
-            </div>
-            <div className="grid gap-2 sm:grid-cols-3">
-              <button onClick={() => startCheckout('topup', 'actions_50')} disabled={!!checkoutBusy || billingPortalBusy} className="rounded-lg border border-slate-200 p-4 text-left hover:bg-slate-50 disabled:opacity-60">
-                <b className="block text-base text-slate-900">$15</b>
-                <span className="mt-1 block text-sm text-slate-600">{checkoutBusy === 'actions_50' ? 'Opening...' : '50 AI actions'}</span>
-              </button>
-            </div>
-          </div>
-          )}
+          <button
+            onClick={hasActiveSubscription ? openBillingPortal : startCheckout}
+            disabled={!!checkoutBusy || billingPortalBusy}
+            className="mt-5 w-full rounded-md bg-blue-600 px-4 py-3 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-60"
+          >
+            {hasActiveSubscription
+              ? billingPortalBusy ? 'Opening...' : 'Manage subscription'
+              : checkoutBusy ? 'Opening...' : 'Subscribe'}
+          </button>
 
           {checkoutError && (
             <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
@@ -1406,13 +1311,12 @@ export default function Home() {
                   <h2 className="text-2xl font-bold text-slate-900">My Resumes / CVs</h2>
                   {billing && (
                     <p className="mt-1 text-sm text-slate-500">
-                      {planLabel} plan - {formatActions(billing.totalActionsRemaining)} AI actions available
-                      {billing.pdfDownloadsLimit ? ` - ${billing.pdfDownloadsUsed ?? 0}/${billing.pdfDownloadsLimit} PDF downloads used` : ' - unlimited PDF downloads'}
+                      {hasActiveSubscription ? 'AI Chat + Resume Agent subscription active' : 'Subscribe to use AI Chat + Resume Agent'}
                     </p>
                   )}
                 </div>
                 <div className="flex items-center gap-2">
-                  {billing && <button onClick={() => openBillingModal(paidPlan ? 'billing' : 'upgrade')} className="rounded-md border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50">Billing</button>}
+                  {billing && <button onClick={() => openBillingModal()} className="rounded-md border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50">Billing</button>}
                   <button onClick={() => fileRef.current?.click()} disabled={uploading} className="rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm hover:bg-blue-700 disabled:opacity-50">Upload PDF/DOCX</button>
                 </div>
               </div>

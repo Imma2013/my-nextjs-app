@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import chromium from '@sparticuz/chromium';
 import puppeteer from 'puppeteer-core';
-import { adminClient, FREE_PDF_DOWNLOAD_LIMIT, getBillingSummary } from '@/lib/billing';
+import { adminClient } from '@/lib/billing';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -88,31 +88,9 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       .single();
     if (error) throw error;
 
-    const billing = await getBillingSummary(userId);
-    if (billing.plan === 'free' && billing.pdfDownloadsUsed >= FREE_PDF_DOWNLOAD_LIMIT) {
-      return NextResponse.json({
-        error: 'Free includes 3 PDF downloads. Upgrade for unlimited downloads.',
-        upgradeRequired: true,
-      }, { status: 402 });
-    }
-
     const printUrl = new URL(`/resumes/${encodeURIComponent(params.id)}/print`, req.nextUrl.origin);
     printUrl.searchParams.set('userId', userId);
     const pdf = await renderResumePdf(printUrl.toString());
-
-    if (billing.plan === 'free') {
-      const { error: usageError } = await supabase.from('usage_events').insert({
-        user_id: userId,
-        action_type: 'pdf_download',
-        idempotency_key: `${params.id}:${Date.now()}:${crypto.randomUUID()}`,
-        resume_id: params.id,
-        credits_charged: 0,
-        free_tailor_used: false,
-        status: 'completed',
-        completed_at: new Date().toISOString(),
-      });
-      if (usageError) throw usageError;
-    }
 
     return new NextResponse(Buffer.from(pdf), {
       headers: {

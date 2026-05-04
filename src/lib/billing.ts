@@ -8,44 +8,28 @@ export type BillingAction =
   | 'resume_builder'
   | 'ai_chat_reply';
 
-export type CheckoutPlan = 'pro_monthly' | 'pro_plus_monthly';
-export type BillingPlan = 'free' | CheckoutPlan;
-export type TopUpPackage = 'actions_50';
+export type CheckoutPlan = 'chat_monthly';
+export type LegacyPaidPlan = 'pro_monthly' | 'pro_plus_monthly';
+export type ActivePaidPlan = CheckoutPlan | LegacyPaidPlan;
+export type BillingPlan = 'unpaid' | ActivePaidPlan;
 
 export class PaymentRequiredError extends Error {
   details: Record<string, unknown>;
 
-  constructor(message = 'Not enough AI actions', details: Record<string, unknown> = {}) {
+  constructor(message = 'Subscribe to Cryzo to use AI Chat + Resume Agent.', details: Record<string, unknown> = {}) {
     super(message);
     this.name = 'PaymentRequiredError';
     this.details = details;
   }
 }
 
-export const PLAN_ACTIONS: Record<CheckoutPlan, number> = {
-  pro_monthly: 100,
-  pro_plus_monthly: 400,
-};
-
-export const PLAN_ROLLOVER_CAPS: Record<CheckoutPlan, number> = {
-  pro_monthly: 100,
-  pro_plus_monthly: 400,
-};
-
 export const PLAN_PRICES: Record<CheckoutPlan, number> = {
-  pro_monthly: 20,
-  pro_plus_monthly: 60,
+  chat_monthly: 10,
 };
 
 export const PLAN_NAMES: Record<CheckoutPlan, string> = {
-  pro_monthly: 'Pro',
-  pro_plus_monthly: 'Pro Plus',
+  chat_monthly: 'AI Chat + Resume Agent',
 };
-
-export const FREE_MONTHLY_ACTION_LIMIT = 5;
-export const FREE_PDF_DOWNLOAD_LIMIT = 3;
-export const TOP_UP_ACTIONS = 50;
-export const TOP_UP_PRICE = 15;
 
 export function adminClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -70,59 +54,38 @@ export function inferResumeBillingAction(message: string): BillingAction {
 }
 
 export function parseCheckoutPlan(plan?: string | null) {
-  if (plan !== 'pro_monthly' && plan !== 'pro_plus_monthly') return null;
+  if (plan !== 'chat_monthly') return null;
   return {
     id: plan,
-    actions: PLAN_ACTIONS[plan],
-    rolloverCap: PLAN_ROLLOVER_CAPS[plan],
     price: PLAN_PRICES[plan],
     name: PLAN_NAMES[plan],
   };
 }
 
-export function parseTopUpPackage(pkg?: string | null) {
-  if (pkg !== 'actions_50') return null;
-  return { id: 'actions_50' as TopUpPackage, actions: TOP_UP_ACTIONS, price: TOP_UP_PRICE };
+export function parseActivePaidPlan(plan?: string | null): ActivePaidPlan | null {
+  if (plan === 'chat_monthly' || plan === 'pro_monthly' || plan === 'pro_plus_monthly') return plan;
+  return null;
 }
 
 export function priceIdForPlan(plan: CheckoutPlan) {
-  if (plan === 'pro_monthly') return process.env.NEXT_PUBLIC_STRIPE_PRO_MONTHLY_PRICE_ID;
-  if (plan === 'pro_plus_monthly') return process.env.NEXT_PUBLIC_STRIPE_PRO_PLUS_MONTHLY_PRICE_ID;
+  if (plan === 'chat_monthly') return process.env.NEXT_PUBLIC_STRIPE_CHAT_MONTHLY_PRICE_ID;
   return undefined;
 }
 
-export function priceIdForTopUp(pkg: TopUpPackage) {
-  if (pkg === 'actions_50') return process.env.NEXT_PUBLIC_STRIPE_ACTIONS_TOPUP_50_PRICE_ID;
-  return undefined;
+export function creditsForPlan(_plan: CheckoutPlan) {
+  void _plan;
+  return 0;
 }
 
-export function creditsForPlan(plan: CheckoutPlan) {
-  return parseCheckoutPlan(plan)?.actions || 0;
+export function hasActiveSubscriptionStatus(status?: string | null) {
+  return status === 'active' || status === 'trialing';
 }
 
-export function creditsForTopUp(pkg: TopUpPackage) {
-  return parseTopUpPackage(pkg)?.actions || 0;
+export function canUsePaidAI(plan?: string | null, status?: string | null) {
+  return Boolean(parseActivePaidPlan(plan) && hasActiveSubscriptionStatus(status));
 }
 
-function roundCredits(value: number) {
-  return Math.round(value * 100) / 100;
-}
-
-function startOfUtcMonth(date = new Date()) {
-  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
-}
-
-function startOfNextUtcMonth(date = new Date()) {
-  const next = startOfUtcMonth(date);
-  next.setUTCMonth(next.getUTCMonth() + 1);
-  return next;
-}
-
-export function freeMonthlyActionsRemaining(used: number, limit = FREE_MONTHLY_ACTION_LIMIT) {
-  return Math.max(0, limit - used);
-}
-
-export async function getActivePaidPlan(userId: string): Promise<CheckoutPlan | null> {
+export async function getActivePaidPlan(userId: string): Promise<ActivePaidPlan | null> {
   const supabase = adminClient();
   const { data, error } = await supabase
     .from('subscriptions')
@@ -134,89 +97,98 @@ export async function getActivePaidPlan(userId: string): Promise<CheckoutPlan | 
     .maybeSingle();
 
   if (error) throw error;
-  const parsed = parseCheckoutPlan(data?.plan);
-  return (parsed?.id as CheckoutPlan | undefined) || null;
+  return parseActivePaidPlan(data?.plan);
 }
 
 export async function getBillingSummary(userId: string) {
   const supabase = adminClient();
-  const now = new Date().toISOString();
-  const monthStart = startOfUtcMonth().toISOString();
-  const nextMonthStart = startOfNextUtcMonth().toISOString();
 
-  const [{ data: ledger, error: ledgerError }, { data: subscription }, { data: freeMonthlyEvents }, { data: pdfDownloads }] = await Promise.all([
-    supabase
-      .from('credit_ledger')
-      .select('amount, source, expires_at')
-      .eq('user_id', userId)
-      .or(`expires_at.is.null,expires_at.gt.${now}`),
-    supabase
-      .from('subscriptions')
-      .select('plan, status, current_period_end')
-      .eq('user_id', userId)
-      .in('status', ['active', 'trialing'])
-      .order('current_period_end', { ascending: false })
-      .limit(1)
-      .maybeSingle(),
-    supabase
-      .from('usage_events')
-      .select('credits_charged')
-      .eq('user_id', userId)
-      .eq('billing_source', 'free_monthly')
-      .eq('status', 'completed')
-      .gte('completed_at', monthStart)
-      .lt('completed_at', nextMonthStart),
-    supabase
-      .from('usage_events')
-      .select('id')
-      .eq('user_id', userId)
-      .eq('action_type', 'pdf_download')
-      .eq('status', 'completed'),
-  ]);
+  const { data: subscription, error: subscriptionError } = await supabase
+    .from('subscriptions')
+    .select('plan, status, current_period_end')
+    .eq('user_id', userId)
+    .in('status', ['active', 'trialing'])
+    .order('current_period_end', { ascending: false })
+    .limit(1)
+    .maybeSingle();
 
-  if (ledgerError) throw ledgerError;
+  if (subscriptionError) throw subscriptionError;
 
-  const parsedPlan = parseCheckoutPlan(subscription?.plan);
-  const plan = parsedPlan?.id || 'free';
-  const monthlyActionsLimit = parsedPlan?.actions || FREE_MONTHLY_ACTION_LIMIT;
-  const currentPeriodEnd = subscription?.current_period_end || null;
-  const freeMonthlyActionsUsed = parsedPlan
-    ? 0
-    : roundCredits((freeMonthlyEvents || []).reduce((sum, row) => sum + Number(row.credits_charged || 0), 0));
-
-  const activeLedger = ledger || [];
-  const subscriptionRows = activeLedger.filter(row => ['stripe_subscription', 'subscription_usage'].includes(String(row.source)));
-  const topUpRows = activeLedger.filter(row => ['stripe_topup', 'topup_usage'].includes(String(row.source)));
-  const subscriptionActionsRemaining = Math.max(0, roundCredits(subscriptionRows.reduce((sum, row) => sum + Number(row.amount || 0), 0)));
-  const rolloverActionsRemaining = parsedPlan && currentPeriodEnd
-    ? Math.max(0, roundCredits(subscriptionRows
-      .filter(row => row.expires_at && String(row.expires_at) <= currentPeriodEnd)
-      .reduce((sum, row) => sum + Number(row.amount || 0), 0)))
-    : 0;
-  const monthlyActionsRemaining = parsedPlan
-    ? Math.max(0, roundCredits(subscriptionActionsRemaining - rolloverActionsRemaining))
-    : freeMonthlyActionsRemaining(freeMonthlyActionsUsed);
-  const topUpActionsRemaining = Math.max(0, roundCredits(topUpRows.reduce((sum, row) => sum + Number(row.amount || 0), 0)));
-  const totalActionsRemaining = parsedPlan
-    ? roundCredits(subscriptionActionsRemaining + topUpActionsRemaining)
-    : monthlyActionsRemaining;
+  const activePlan = parseActivePaidPlan(subscription?.plan);
+  const isPaid = Boolean(activePlan);
+  const plan = activePlan || 'unpaid';
 
   return {
     userId,
     plan,
-    planStatus: parsedPlan ? subscription?.status || 'inactive' : 'free',
-    currentPeriodEnd,
-    monthlyActionsRemaining,
-    monthlyActionsLimit,
-    rolloverActionsRemaining,
-    topUpActionsRemaining,
-    totalActionsRemaining,
-    freeMonthlyActionsUsed,
-    pdfDownloadsUsed: pdfDownloads?.length || 0,
-    pdfDownloadsLimit: parsedPlan ? null : FREE_PDF_DOWNLOAD_LIMIT,
-    credits: totalActionsRemaining,
-    freeTailorAvailable: plan === 'free' && monthlyActionsRemaining >= creditCostForAction('tailor_resume'),
+    planStatus: isPaid ? subscription?.status || 'inactive' : 'unpaid',
+    isPaid,
+    currentPeriodEnd: subscription?.current_period_end || null,
+    monthlyActionsRemaining: 0,
+    monthlyActionsLimit: 0,
+    rolloverActionsRemaining: 0,
+    topUpActionsRemaining: 0,
+    totalActionsRemaining: 0,
+    freeMonthlyActionsUsed: 0,
+    pdfDownloadsUsed: 0,
+    pdfDownloadsLimit: null,
+    credits: 0,
+    freeTailorAvailable: false,
   };
+}
+
+async function getUsageEvent({
+  supabase,
+  userId,
+  actionType,
+  idempotencyKey,
+}: {
+  supabase: ReturnType<typeof adminClient>;
+  userId: string;
+  actionType: BillingAction;
+  idempotencyKey: string;
+}) {
+  const { data, error } = await supabase
+    .from('usage_events')
+    .select('id, credits_charged, free_tailor_used, billing_source, status')
+    .eq('user_id', userId)
+    .eq('action_type', actionType)
+    .eq('idempotency_key', idempotencyKey)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data;
+}
+
+export async function getLatestSubscriptionForUser(userId: string) {
+  const supabase = adminClient();
+  const { data, error } = await supabase
+    .from('subscriptions')
+    .select('plan, status, current_period_end')
+    .eq('user_id', userId)
+    .in('status', ['active', 'trialing'])
+    .order('current_period_end', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data;
+}
+
+export async function assertCanUsePaidAI(userId: string) {
+  const subscription = await getLatestSubscriptionForUser(userId);
+  if (canUsePaidAI(subscription?.plan, subscription?.status)) {
+    return {
+      plan: parseActivePaidPlan(subscription?.plan),
+      status: subscription?.status,
+    };
+  }
+
+  throw new PaymentRequiredError('Subscribe to Cryzo to use AI Chat + Resume Agent.', {
+    subscriptionRequired: true,
+    plan: parseActivePaidPlan(subscription?.plan) || 'unpaid',
+    status: subscription?.status || 'unpaid',
+  });
 }
 
 export async function assertCanRunPaidAction({
@@ -231,41 +203,21 @@ export async function assertCanRunPaidAction({
   idempotencyKey: string;
 }) {
   const supabase = adminClient();
-
-  const { data: existing, error: existingError } = await supabase
-    .from('usage_events')
-    .select('id, credits_charged, free_tailor_used, billing_source, status')
-    .eq('user_id', userId)
-    .eq('action_type', actionType)
-    .eq('idempotency_key', idempotencyKey)
-    .maybeSingle();
-
-  if (existingError) throw existingError;
+  const existing = await getUsageEvent({ supabase, userId, actionType, idempotencyKey });
   if (existing?.status === 'completed') {
     return {
-      mode: existing.billing_source || (existing.free_tailor_used ? 'free_monthly' : 'actions'),
+      mode: existing.billing_source || 'subscription',
       alreadyRecorded: true,
     } as const;
   }
 
-  const summary = await getBillingSummary(userId);
-  if (summary.plan === 'free' && summary.monthlyActionsRemaining >= cost) {
-    return { mode: 'free_monthly', alreadyRecorded: false } as const;
-  }
-
-  if (summary.plan !== 'free' && summary.totalActionsRemaining >= cost) {
-    return { mode: 'actions', alreadyRecorded: false } as const;
-  }
-
-  throw new PaymentRequiredError(`This AI action costs ${cost} action${cost === 1 ? '' : 's'}. You have ${summary.totalActionsRemaining} remaining.`, {
-    credits: summary.totalActionsRemaining,
-    remainingActions: summary.totalActionsRemaining,
-    monthlyActionsRemaining: summary.monthlyActionsRemaining,
-    rolloverActionsRemaining: summary.rolloverActionsRemaining,
-    topUpActionsRemaining: summary.topUpActionsRemaining,
+  const subscription = await assertCanUsePaidAI(userId);
+  return {
+    mode: 'subscription',
+    alreadyRecorded: false,
     cost,
-    plan: summary.plan,
-  });
+    plan: subscription.plan,
+  } as const;
 }
 
 export async function recordPaidActionSuccess({
@@ -282,21 +234,33 @@ export async function recordPaidActionSuccess({
   resumeId?: string | null;
 }) {
   const supabase = adminClient();
-  const { data, error } = await supabase.rpc('consume_resume_ai_credit', {
-    p_user_id: userId,
-    p_action_type: actionType,
-    p_idempotency_key: idempotencyKey,
-    p_resume_id: resumeId || null,
-    p_cost: cost,
-  });
+  await assertCanUsePaidAI(userId);
 
-  if (!error) return data;
+  const completedAt = new Date().toISOString();
+  const { data, error } = await supabase
+    .from('usage_events')
+    .upsert({
+      user_id: userId,
+      action_type: actionType,
+      idempotency_key: idempotencyKey,
+      resume_id: resumeId || null,
+      credits_charged: cost,
+      free_tailor_used: false,
+      billing_source: 'subscription',
+      status: 'completed',
+      completed_at: completedAt,
+    }, { onConflict: 'user_id,action_type,idempotency_key' })
+    .select('id, credits_charged, billing_source, status')
+    .single();
 
-  if (error.message?.includes('INSUFFICIENT_CREDITS')) {
-    throw new PaymentRequiredError('You need AI actions to run this AI action.');
-  }
+  if (error) throw error;
 
-  throw error;
+  return {
+    usageEventId: data?.id,
+    creditsCharged: data?.credits_charged,
+    billingSource: data?.billing_source,
+    alreadyRecorded: false,
+  };
 }
 
 export async function getOrCreateStripeCustomer(userId: string) {

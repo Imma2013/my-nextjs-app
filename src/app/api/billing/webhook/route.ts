@@ -2,14 +2,11 @@ import crypto from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import {
   adminClient,
-  creditsForPlan,
-  creditsForTopUp,
+  parseActivePaidPlan,
   parseCheckoutPlan,
-  parseTopUpPackage,
   priceIdForPlan,
   stripeGet,
   type CheckoutPlan,
-  type TopUpPackage,
 } from '@/lib/billing';
 
 export const runtime = 'nodejs';
@@ -41,20 +38,12 @@ function verifyStripeSignature(payload: string, signature: string | null) {
 
 function planFromPrice(priceId?: string | null): CheckoutPlan | null {
   if (!priceId) return null;
-  if (priceId === priceIdForPlan('pro_monthly')) return 'pro_monthly';
-  if (priceId === priceIdForPlan('pro_plus_monthly')) return 'pro_plus_monthly';
+  if (priceId === priceIdForPlan('chat_monthly')) return 'chat_monthly';
   return null;
 }
 
 function timestampToIso(value?: number | null) {
   return value ? new Date(value * 1000).toISOString() : null;
-}
-
-function addOneMonth(iso?: string | null) {
-  if (!iso) return null;
-  const date = new Date(iso);
-  date.setUTCMonth(date.getUTCMonth() + 1);
-  return date.toISOString();
 }
 
 async function upsertCustomer(userId: string, customerId: string) {
@@ -64,15 +53,6 @@ async function upsertCustomer(userId: string, customerId: string) {
     .upsert({ user_id: userId, stripe_customer_id: customerId, updated_at: new Date().toISOString() }, { onConflict: 'user_id' });
 
   if (error) throw error;
-}
-
-async function insertCreditLedgerOnce(row: Record<string, unknown>) {
-  const supabase = adminClient();
-  const { error } = await supabase.from('credit_ledger').insert(row);
-
-  if (!error) return;
-  if (error.code === '23505') return;
-  throw error;
 }
 
 async function userIdForCustomer(customerId: string) {
@@ -92,64 +72,28 @@ async function handleCheckoutCompleted(event: any) {
   if (!userId || !customerId) return;
 
   await upsertCustomer(userId, customerId);
-
-  if (session.mode !== 'payment' || session.metadata?.type !== 'topup') return;
-
-  const parsedTopUp = parseTopUpPackage(session.metadata?.package);
-  if (!parsedTopUp) return;
-  const pkg = parsedTopUp.id as TopUpPackage;
-
-  const expiresAt = new Date();
-  expiresAt.setFullYear(expiresAt.getFullYear() + 1);
-
-  await insertCreditLedgerOnce({
-    user_id: userId,
-    event_type: 'purchase',
-    amount: creditsForTopUp(pkg),
-    source: 'stripe_topup',
-    stripe_event_id: event.id,
-    stripe_checkout_session_id: session.id,
-    expires_at: expiresAt.toISOString(),
-    metadata: { package: pkg, plan: session.metadata?.plan || null, kind: 'stripe_topup' },
-  });
 }
 
-async function subscriptionCreditsGrantedThisPeriod({
-  userId,
-  subscriptionId,
-  periodStart,
-}: {
-  userId: string;
-  subscriptionId: string;
-  periodStart?: string | null;
-}) {
-  if (!periodStart) return 0;
+async function upsertSubscriptionFromStripe(subscription: any) {
+  let customerId = typeof subscription.customer === 'string' ? subscription.customer : subscription.customer?.id;
   const supabase = adminClient();
-  const { data, error } = await supabase
-    .from('credit_ledger')
-    .select('amount')
-    .eq('user_id', userId)
-    .eq('stripe_subscription_id', subscriptionId)
-    .eq('source', 'stripe_subscription')
-    .contains('metadata', { period_start: periodStart });
+  const { data: existingSubscription } = await supabase
+    .from('subscriptions')
+    .select('user_id, stripe_customer_id, plan')
+    .eq('stripe_subscription_id', subscription.id)
+    .maybeSingle();
 
-  if (error) throw error;
-  return (data || []).reduce((sum, row) => sum + Number(row.amount || 0), 0);
-}
-
-async function upsertSubscriptionFromStripe(subscription: any, eventId?: string) {
-  const customerId = typeof subscription.customer === 'string' ? subscription.customer : subscription.customer?.id;
-  const userId = subscription.metadata?.user_id || (customerId ? await userIdForCustomer(customerId) : undefined);
+  let userId = subscription.metadata?.user_id || existingSubscription?.user_id || (customerId ? await userIdForCustomer(customerId) : undefined);
+  customerId = customerId || existingSubscription?.stripe_customer_id;
   const priceId = subscription.items?.data?.[0]?.price?.id;
-  const parsedPlan = parseCheckoutPlan(subscription.metadata?.plan) || parseCheckoutPlan(planFromPrice(priceId));
-  if (!userId || !customerId || !parsedPlan) return;
-  const plan = parsedPlan.id as CheckoutPlan;
+  const checkoutPlan = parseCheckoutPlan(subscription.metadata?.plan)?.id || planFromPrice(priceId);
+  const plan = checkoutPlan || parseActivePaidPlan(subscription.metadata?.plan) || parseActivePaidPlan(existingSubscription?.plan);
+  if (!userId || !customerId || !plan) return;
 
   await upsertCustomer(userId, customerId);
 
   const currentPeriodStart = timestampToIso(subscription.current_period_start);
   const currentPeriodEnd = timestampToIso(subscription.current_period_end);
-  const supabase = adminClient();
   const { error: subscriptionError } = await supabase.from('subscriptions').upsert({
     user_id: userId,
     stripe_customer_id: customerId,
@@ -164,35 +108,6 @@ async function upsertSubscriptionFromStripe(subscription: any, eventId?: string)
   }, { onConflict: 'stripe_subscription_id' });
 
   if (subscriptionError) throw subscriptionError;
-
-  if (eventId && ['active', 'trialing'].includes(subscription.status)) {
-    const alreadyGranted = await subscriptionCreditsGrantedThisPeriod({
-      userId,
-      subscriptionId: subscription.id,
-      periodStart: currentPeriodStart,
-    });
-    const grantAmount = Math.max(0, creditsForPlan(plan) - alreadyGranted);
-    if (grantAmount <= 0) return;
-
-    await insertCreditLedgerOnce({
-      user_id: userId,
-      event_type: 'subscription_grant',
-      amount: grantAmount,
-      source: 'stripe_subscription',
-      stripe_event_id: eventId,
-      stripe_subscription_id: subscription.id,
-      expires_at: addOneMonth(currentPeriodEnd),
-      metadata: {
-        plan,
-        kind: 'stripe_subscription',
-        period_start: currentPeriodStart,
-        period_end: currentPeriodEnd,
-        monthly_actions: parsedPlan.actions,
-        rollover_cap: parsedPlan.rolloverCap,
-        already_granted: alreadyGranted,
-      },
-    });
-  }
 }
 
 async function handleInvoicePaid(event: any) {
@@ -201,7 +116,7 @@ async function handleInvoicePaid(event: any) {
   if (!subscriptionId) return;
 
   const subscription = await stripeGet<any>(`/v1/subscriptions/${subscriptionId}`);
-  await upsertSubscriptionFromStripe(subscription, event.id);
+  await upsertSubscriptionFromStripe(subscription);
 }
 
 async function handleSubscriptionEvent(event: any) {

@@ -1,15 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
-  creditsForTopUp,
-  getActivePaidPlan,
   getOrCreateStripeCustomer,
   parseCheckoutPlan,
-  parseTopUpPackage,
   priceIdForPlan,
-  priceIdForTopUp,
   stripeRequest,
   type CheckoutPlan,
-  type TopUpPackage,
 } from '@/lib/billing';
 
 type CheckoutResponse = { id: string; url: string };
@@ -24,18 +19,16 @@ export async function POST(req: NextRequest) {
       userId,
       checkoutType,
       plan,
-      package: topUpPackage,
       returnPath,
     }: {
       userId?: string;
-      checkoutType?: 'subscription' | 'topup';
+      checkoutType?: 'subscription';
       plan?: string;
-      package?: string;
       returnPath?: string;
     } = await req.json();
 
     if (!userId) return NextResponse.json({ error: 'Missing userId' }, { status: 400 });
-    if (checkoutType !== 'subscription' && checkoutType !== 'topup') {
+    if (checkoutType !== 'subscription') {
       return NextResponse.json({ error: 'Invalid checkout type' }, { status: 400 });
     }
 
@@ -45,53 +38,17 @@ export async function POST(req: NextRequest) {
     const successUrl = `${baseUrl}${safeReturnPath}${safeReturnPath.includes('?') ? '&' : '?'}checkout=success`;
     const cancelUrl = `${baseUrl}${safeReturnPath}${safeReturnPath.includes('?') ? '&' : '?'}checkout=cancelled`;
 
-    if (checkoutType === 'subscription') {
-      const parsedPlan = parseCheckoutPlan(plan);
-      if (!parsedPlan) {
-        return NextResponse.json({ error: 'Invalid plan' }, { status: 400 });
-      }
-
-      const checkoutPlan = parsedPlan.id as CheckoutPlan;
-      const price = priceIdForPlan(checkoutPlan);
-      if (!price) return NextResponse.json({ error: 'Stripe plan price is not configured' }, { status: 500 });
-
-      const session = await stripeRequest<CheckoutResponse>('/v1/checkout/sessions', {
-        mode: 'subscription',
-        customer,
-        client_reference_id: userId,
-        success_url: successUrl,
-        cancel_url: cancelUrl,
-        'line_items[0][price]': price,
-        'line_items[0][quantity]': 1,
-        'metadata[user_id]': userId,
-        'metadata[type]': 'subscription',
-        'metadata[plan]': checkoutPlan,
-        'metadata[actions]': parsedPlan.actions,
-        'subscription_data[metadata][user_id]': userId,
-        'subscription_data[metadata][plan]': checkoutPlan,
-        'subscription_data[metadata][actions]': parsedPlan.actions,
-      });
-
-      return NextResponse.json({ url: session.url });
+    const parsedPlan = parseCheckoutPlan(plan);
+    if (!parsedPlan) {
+      return NextResponse.json({ error: 'Invalid plan' }, { status: 400 });
     }
 
-    const parsedTopUp = parseTopUpPackage(topUpPackage);
-    if (!parsedTopUp) {
-      return NextResponse.json({ error: 'Invalid top-up package' }, { status: 400 });
-    }
+    const checkoutPlan = parsedPlan.id as CheckoutPlan;
+    const price = priceIdForPlan(checkoutPlan);
+    if (!price) return NextResponse.json({ error: 'Stripe plan price is not configured' }, { status: 500 });
 
-    const activePlan = await getActivePaidPlan(userId);
-    if (!activePlan) {
-      return NextResponse.json({ error: 'Top-ups are only available for active paid plans' }, { status: 400 });
-    }
-
-    const topUp = parsedTopUp.id as TopUpPackage;
-    const price = priceIdForTopUp(topUp);
-    if (!price) return NextResponse.json({ error: 'Stripe top-up price is not configured' }, { status: 500 });
-
-    const actions = creditsForTopUp(topUp);
     const session = await stripeRequest<CheckoutResponse>('/v1/checkout/sessions', {
-      mode: 'payment',
+      mode: 'subscription',
       customer,
       client_reference_id: userId,
       success_url: successUrl,
@@ -99,15 +56,10 @@ export async function POST(req: NextRequest) {
       'line_items[0][price]': price,
       'line_items[0][quantity]': 1,
       'metadata[user_id]': userId,
-      'metadata[type]': 'topup',
-      'metadata[package]': topUp,
-      'metadata[plan]': activePlan,
-      'metadata[actions]': actions,
-      'payment_intent_data[metadata][user_id]': userId,
-      'payment_intent_data[metadata][type]': 'topup',
-      'payment_intent_data[metadata][package]': topUp,
-      'payment_intent_data[metadata][plan]': activePlan,
-      'payment_intent_data[metadata][actions]': actions,
+      'metadata[type]': 'subscription',
+      'metadata[plan]': checkoutPlan,
+      'subscription_data[metadata][user_id]': userId,
+      'subscription_data[metadata][plan]': checkoutPlan,
     });
 
     return NextResponse.json({ url: session.url });

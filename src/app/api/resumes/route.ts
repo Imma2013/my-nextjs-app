@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getBillingSummary } from '@/lib/billing';
 import { formatAtsReviewSummary, normalizeAtsResume, reviewAtsResume } from '@/lib/resumeAts';
 
 const BUCKET = 'resume-files';
@@ -91,22 +90,6 @@ export async function POST(req: NextRequest) {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
     if (!supabaseUrl || !serviceKey) return NextResponse.json({ error: 'Supabase is not configured' }, { status: 500 });
-
-    const billing = await getBillingSummary(userId);
-    if (billing.plan === 'free') {
-      const existingResumesRes = await fetch(`${supabaseUrl}/rest/v1/resumes?user_id=eq.${encodeURIComponent(userId)}&storage_path=not.is.null&select=id`, {
-        method: 'GET',
-        headers: restHeaders(serviceKey),
-      });
-      if (!existingResumesRes.ok) throw new Error(await existingResumesRes.text());
-      const existingResumes = await existingResumesRes.json();
-      if ((existingResumes || []).length >= 1) {
-        return NextResponse.json({
-          error: 'Free includes one uploaded resume. Upgrade to create more base resumes.',
-          upgradeRequired: true,
-        }, { status: 402 });
-      }
-    }
 
     const parseForm = new FormData();
     parseForm.append('file', file);

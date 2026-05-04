@@ -9,6 +9,6 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(await getBillingSummary(userId));
   } catch (error) {
     console.error(error);
-    return NextResponse.json({ error: error instanceof Error ? error.message : 'Failed to load AI actions' }, { status: 500 });
+    return NextResponse.json({ error: error instanceof Error ? error.message : 'Failed to load billing status' }, { status: 500 });
   }
 }

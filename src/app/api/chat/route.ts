@@ -56,14 +56,6 @@ function textFromMessage(message?: UIMessage) {
     .trim();
 }
 
-function looksLikeJobSearchRequest(text: string) {
-  return /\b(find|search|show|look for|list|recommend|browse|get)\b.*\b(jobs?|roles?|openings?|internships?|hiring|positions?)\b|\b(jobs?|roles?|openings?|internships?|hiring|positions?)\b.*\b(near me|remote|hybrid|onsite|available|open|hiring|at\b|in\b)/i.test(text);
-}
-
-function looksLikeResumeMutationRequest(text: string) {
-  return /\btailor\b|\btarget\b|\bats\b|\bcover letter\b|\bresume builder\b|\b(optimi[sz]e|rewrite|improve|edit|update)\b.*\bresume\b|\bresume\b.*\b(optimi[sz]e|rewrite|improve|edit|update)\b/i.test(text);
-}
-
 function toolNameFromPart(part: unknown) {
   const typed = part as { type?: unknown; toolName?: unknown };
   if (typeof typed.type === 'string' && typed.type.startsWith('tool-')) return typed.type.slice(5);
@@ -170,8 +162,7 @@ export async function POST(req: NextRequest) {
     let sid = sessionId || null;
     const lastMessage = messages[messages.length - 1];
     const lastUserText = lastMessage.role === 'user' ? textFromMessage(lastMessage) : '';
-    const isFreeJobSearch = looksLikeJobSearchRequest(lastUserText);
-    const shouldChargeChatReply = Boolean(lastUserText && !isFreeJobSearch && !looksLikeResumeMutationRequest(lastUserText));
+    const shouldChargeChatReply = Boolean(lastUserText);
     const chatActionType = 'ai_chat_reply' as const;
     const chatActionCost = creditCostForAction(chatActionType);
 
@@ -207,7 +198,7 @@ export async function POST(req: NextRequest) {
 
     if (shouldChargeChatReply) {
       if (!userId) {
-        return NextResponse.json({ error: 'Sign in to use AI chat.', paymentRequired: true, cost: chatActionCost, remainingActions: 0 }, { status: 402 });
+        return NextResponse.json({ error: 'Sign in and subscribe to use AI chat.', paymentRequired: true, subscriptionRequired: true }, { status: 402 });
       }
       await assertCanRunPaidAction({
         userId,
@@ -294,12 +285,8 @@ export async function POST(req: NextRequest) {
               return {
                 success: false,
                 paymentRequired: true,
-                reply: error.message || `This AI action costs ${error.details.cost || 1}. You have ${error.details.remainingActions || 0} remaining.`,
-                remainingActions: error.details.remainingActions,
-                monthlyActionsRemaining: error.details.monthlyActionsRemaining,
-                rolloverActionsRemaining: error.details.rolloverActionsRemaining,
-                topUpActionsRemaining: error.details.topUpActionsRemaining,
-                cost: error.details.cost,
+                subscriptionRequired: true,
+                reply: error.message,
               };
             }
 
