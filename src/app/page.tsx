@@ -173,11 +173,6 @@ function isChatBillingError(error: unknown) {
   return /paymentRequired|subscribe to cryzo|subscriptionRequired/i.test(message);
 }
 
-function isChatBillingError(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error || '');
-  return /paymentRequired|This AI action costs|0 remaining/i.test(message);
-}
-
 export default function Home() {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
